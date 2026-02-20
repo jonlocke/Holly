@@ -1,47 +1,20 @@
 # Clyde
+Clyde is an AI Agent
 
-Clyde is an AI Agent backed by Ollama.
+## Runtime configuration
+Both `main.py` and `main-cyberpunk.py` now read startup settings from environment variables:
 
-## Required environment variables
+- `FLASK_DEBUG` (default: `0`)
+- `HOST` (default: `127.0.0.1`)
+- `PORT` (default: `5000`)
 
-Both entrypoints (`main.py` and `main-cyberpunk.py`) require these environment variables:
+### Safe defaults
+- **Local development**: keep `HOST=127.0.0.1` and set `FLASK_DEBUG=1` when you need the Flask debugger/reloader.
+- **Deployment**: keep `FLASK_DEBUG=0`, bind to the required interface with `HOST` (often `0.0.0.0` in containers), and set `PORT` from your runtime environment.
 
-- `OLLAMA_API_BASE`: Base URL for the Ollama API (for example `http://localhost:11434`).
-- `OLLAMA_MODEL`: Ollama model name to use (for example `qwen3:4b-16k`).
-
-### Local development defaults
-
-When `APP_ENV` or `FLASK_ENV` is set to `local`, `dev`, or `development`, the app will use local defaults if either value is unset:
-
-- `OLLAMA_API_BASE=http://localhost:11434`
-- `OLLAMA_MODEL=qwen3:4b-16k` (`main.py`) or `gpt-oss:120b-cloud` (`main-cyberpunk.py`)
-
-Outside local development, missing or invalid values cause startup to fail with clear error logs.
-
-## Example launch commands
-
-### Standard UI (`main.py`)
+Example:
 
 ```bash
-OLLAMA_API_BASE=http://localhost:11434 \
-OLLAMA_MODEL=qwen3:4b-16k \
-python main.py
+FLASK_DEBUG=1 HOST=127.0.0.1 PORT=5000 python main.py
 ```
 
-### Cyberpunk UI (`main-cyberpunk.py`)
-
-```bash
-OLLAMA_API_BASE=http://localhost:11434 \
-OLLAMA_MODEL=gpt-oss:120b-cloud \
-python main-cyberpunk.py
-```
-
-### Local development with fallback defaults
-
-```bash
-APP_ENV=development python main.py
-```
-
-```bash
-FLASK_ENV=dev python main-cyberpunk.py
-```
