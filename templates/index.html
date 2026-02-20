@@ -5,6 +5,7 @@
     <title>Your AI</title>
     <link rel="stylesheet" href="/static/style.css" />
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
 </head>
 <body>
 
@@ -30,6 +31,28 @@ const input = document.getElementById("user-input");
 const output = document.getElementById("output");
 const stopBtn = document.getElementById("stop-btn");
 const themeToggle = document.getElementById("theme-toggle");
+
+const SANITIZE_CONFIG = {
+    FORBID_TAGS: ["script"],
+};
+
+DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
+    if (data.attrName && data.attrName.toLowerCase().startsWith("on")) {
+        data.keepAttr = false;
+    }
+});
+
+const isDevHost = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+if (isDevHost) {
+    const xssPayload = "<img src=x onerror=alert(1)>";
+    const sanitizedCheck = DOMPurify.sanitize(marked.parse(xssPayload), SANITIZE_CONFIG);
+    const isInert = !/on\w+=|<script/i.test(sanitizedCheck);
+    console[isInert ? "info" : "error"](
+        "[dev-xss-check]",
+        isInert ? "Sanitization check passed." : "Sanitization check failed.",
+        sanitizedCheck
+    );
+}
 
 let currentStream = null;
 let autoScroll = true;
@@ -66,7 +89,7 @@ themeToggle.addEventListener("click", () => {
 
 stopBtn.addEventListener("click", () => {
     if (currentStream) {
-        currentStream.close();
+        currentStream.abort();
         currentStream = null;
     }
     stopBtn.disabled = true;
@@ -140,18 +163,21 @@ function streamResponse(message) {
     input.disabled = true;
     stopBtn.disabled = false;
 
-    currentStream = new EventSource(
-        `/stream?message=${encodeURIComponent(message)}`
-    );
-
-    const evtSource = currentStream;
+    const abortController = new AbortController();
+    currentStream = abortController;
 
     let textNode = null;
     let cursorEl = null;
     let started = false;
 
-    evtSource.onmessage = function(event) {
-        const data = JSON.parse(event.data);
+    const resetUi = () => {
+        input.disabled = false;
+        input.focus();
+        stopBtn.disabled = true;
+        currentStream = null;
+    };
+
+    const handleEvent = (data) => {
 
         if (data.type === "token") {
 
@@ -177,7 +203,9 @@ function streamResponse(message) {
             if (cursorEl) cursorEl.remove();
 
             // Render markdown once
-            bubble.innerHTML = marked.parse(textNode.nodeValue);
+            const parsedHtml = marked.parse(textNode.nodeValue);
+            const sanitizedHtml = DOMPurify.sanitize(parsedHtml, SANITIZE_CONFIG);
+            bubble.innerHTML = sanitizedHtml;
 
             input.disabled = false;
             input.focus();
@@ -189,22 +217,72 @@ function streamResponse(message) {
 
         if (data.type === "error") {
             bubble.textContent = "Error: " + data.error;
-            input.disabled = false;
-            stopBtn.disabled = true;
-            evtSource.close();
-            currentStream = null;
+            resetUi();
         }
     };
 
-    evtSource.onerror = function() {
-        input.disabled = false;
-        stopBtn.disabled = true;
-        evtSource.close();
-        currentStream = null;
-    };
+    fetch("/stream", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ message }),
+        signal: abortController.signal,
+    })
+        .then(async (response) => {
+            if (!response.body) {
+                throw new Error("No response stream available.");
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const events = buffer.split("\n\n");
+                buffer = events.pop() || "";
+
+                for (const rawEvent of events) {
+                    const line = rawEvent
+                        .split("\n")
+                        .find((entry) => entry.startsWith("data:"));
+
+                    if (!line) continue;
+
+                    try {
+                        const data = JSON.parse(line.slice(5).trim());
+                        handleEvent(data);
+                    } catch {
+                        handleEvent({
+                            type: "error",
+                            error: "Malformed server event.",
+                        });
+                    }
+                }
+            }
+
+            if (currentStream === abortController) {
+                resetUi();
+            }
+        })
+        .catch((error) => {
+            if (error.name === "AbortError") {
+                bubble.textContent = "Request stopped.";
+                resetUi();
+                return;
+            }
+
+            handleEvent({
+                type: "error",
+                error: "Unable to stream response.",
+            });
+        });
 }
 </script>
 
 </body>
 </html>
-
