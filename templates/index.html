@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Your AI</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+
+<div class="app">
+    <div class="chat-container" id="output"></div>
+
+    <form id="chat-form" class="input-bar">
+	<button id="theme-toggle" class="theme-btn">🌙</button>
+        <textarea 
+            id="user-input" 
+            rows="1" 
+            placeholder="Ask anything..."
+        ></textarea>
+
+        <button type="submit">Send</button>
+        <button type="button" id="stop-btn" disabled>Stop</button>
+    </form>
+</div>
+
+<script>
+const form = document.getElementById("chat-form");
+const input = document.getElementById("user-input");
+const output = document.getElementById("output");
+const stopBtn = document.getElementById("stop-btn");
+const themeToggle = document.getElementById("theme-toggle");
+
+let currentStream = null;
+let autoScroll = true;
+const MAX_MESSAGES = 100;
+
+/* ---------------- Scroll Lock ---------------- */
+
+output.addEventListener("scroll", () => {
+    const threshold = 50;
+    autoScroll =
+        output.scrollHeight - output.scrollTop - output.clientHeight < threshold;
+});
+
+function safeScroll() {
+    if (autoScroll) {
+        output.scrollTop = output.scrollHeight;
+    }
+}
+
+/* ---------------- Auto Resize ---------------- */
+
+input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = input.scrollHeight + "px";
+});
+
+/* ---------------- Theme Toggle ---------------- */
+
+themeToggle.addEventListener("click", () => {
+    document.body.classList.toggle("dark");
+});
+
+/* ---------------- Stop Button ---------------- */
+
+stopBtn.addEventListener("click", () => {
+    if (currentStream) {
+        currentStream.close();
+        currentStream = null;
+    }
+    stopBtn.disabled = true;
+    input.disabled = false;
+});
+
+/* ---------------- Message Trim ---------------- */
+
+function trimMessages() {
+    while (output.children.length > MAX_MESSAGES) {
+        output.removeChild(output.firstChild);
+    }
+}
+
+/* ---------------- Append Message ---------------- */
+
+function appendMessage(content, role) {
+    const msg = document.createElement("div");
+    msg.className = "message " + role;
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.textContent = content;
+
+    msg.appendChild(bubble);
+    output.appendChild(msg);
+
+    trimMessages();
+    safeScroll();
+}
+
+/* ---------------- Form Submit ---------------- */
+
+form.addEventListener("submit", function(e) {
+    e.preventDefault();
+
+    const message = input.value.trim();
+    if (!message) return;
+
+    appendMessage(message, "user");
+
+    input.value = "";
+    input.style.height = "auto";
+
+    streamResponse(message);
+});
+
+/* ---------------- Streaming ---------------- */
+
+function streamResponse(message) {
+
+    const msg = document.createElement("div");
+    msg.className = "message assistant";
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+
+    // Typing indicator
+    bubble.innerHTML = `
+        <span class="typing">
+            <span></span><span></span><span></span>
+        </span>
+    `;
+
+    msg.appendChild(bubble);
+    output.appendChild(msg);
+
+    trimMessages();
+    safeScroll();
+
+    input.disabled = true;
+    stopBtn.disabled = false;
+
+    currentStream = new EventSource(
+        `/stream?message=${encodeURIComponent(message)}`
+    );
+
+    const evtSource = currentStream;
+
+    let textNode = null;
+    let cursorEl = null;
+    let started = false;
+
+    evtSource.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+
+        if (data.type === "token") {
+
+            if (!started) {
+                bubble.innerHTML = "";
+
+                textNode = document.createTextNode("");
+                bubble.appendChild(textNode);
+
+                cursorEl = document.createElement("span");
+                cursorEl.className = "cursor";
+                bubble.appendChild(cursorEl);
+
+                started = true;
+            }
+
+            textNode.nodeValue += data.content;
+            safeScroll();
+        }
+
+        if (data.type === "done") {
+
+            if (cursorEl) cursorEl.remove();
+
+            // Render markdown once
+            bubble.innerHTML = marked.parse(textNode.nodeValue);
+
+            input.disabled = false;
+            input.focus();
+            stopBtn.disabled = true;
+
+            evtSource.close();
+            currentStream = null;
+        }
+
+        if (data.type === "error") {
+            bubble.textContent = "Error: " + data.error;
+            input.disabled = false;
+            stopBtn.disabled = true;
+            evtSource.close();
+            currentStream = null;
+        }
+    };
+
+    evtSource.onerror = function() {
+        input.disabled = false;
+        stopBtn.disabled = true;
+        evtSource.close();
+        currentStream = null;
+    };
+}
+</script>
+
+</body>
+</html>
+
