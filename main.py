@@ -61,5 +61,7 @@ def stream():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, threaded=True)
-
+    debug = os.getenv("FLASK_DEBUG", "0") == "1"
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "5000"))
+    app.run(debug=debug, threaded=True, host=host, port=port)
