@@ -199,6 +199,11 @@ function streamResponse(message) {
         }
 
         if (data.type === "done") {
+            if (!started) {
+                bubble.textContent = "";
+                resetUi();
+                return;
+            }
 
             if (cursorEl) cursorEl.remove();
 
@@ -211,8 +216,7 @@ function streamResponse(message) {
             input.focus();
             stopBtn.disabled = true;
 
-            evtSource.close();
-            currentStream = null;
+            resetUi();
         }
 
         if (data.type === "error") {
@@ -230,6 +234,11 @@ function streamResponse(message) {
         signal: abortController.signal,
     })
         .then(async (response) => {
+            if (!response.ok) {
+                const message = await response.text();
+                throw new Error(message || `Request failed with status ${response.status}`);
+            }
+
             if (!response.body) {
                 throw new Error("No response stream available.");
             }
@@ -247,14 +256,17 @@ function streamResponse(message) {
                 buffer = events.pop() || "";
 
                 for (const rawEvent of events) {
-                    const line = rawEvent
+                    const dataLines = rawEvent
                         .split("\n")
-                        .find((entry) => entry.startsWith("data:"));
+                        .filter((entry) => entry.startsWith("data:"));
 
-                    if (!line) continue;
+                    if (!dataLines.length) continue;
 
                     try {
-                        const data = JSON.parse(line.slice(5).trim());
+                        const payload = dataLines
+                            .map((line) => line.slice(5).trim())
+                            .join("\n");
+                        const data = JSON.parse(payload);
                         handleEvent(data);
                     } catch {
                         handleEvent({
