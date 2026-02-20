@@ -5,6 +5,7 @@
     <title>Your AI</title>
     <link rel="stylesheet" href="/static/style.css" />
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
 </head>
 <body>
 
@@ -30,6 +31,28 @@ const input = document.getElementById("user-input");
 const output = document.getElementById("output");
 const stopBtn = document.getElementById("stop-btn");
 const themeToggle = document.getElementById("theme-toggle");
+
+const SANITIZE_CONFIG = {
+    FORBID_TAGS: ["script"],
+};
+
+DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
+    if (data.attrName && data.attrName.toLowerCase().startsWith("on")) {
+        data.keepAttr = false;
+    }
+});
+
+const isDevHost = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+if (isDevHost) {
+    const xssPayload = "<img src=x onerror=alert(1)>";
+    const sanitizedCheck = DOMPurify.sanitize(marked.parse(xssPayload), SANITIZE_CONFIG);
+    const isInert = !/on\w+=|<script/i.test(sanitizedCheck);
+    console[isInert ? "info" : "error"](
+        "[dev-xss-check]",
+        isInert ? "Sanitization check passed." : "Sanitization check failed.",
+        sanitizedCheck
+    );
+}
 
 let currentStream = null;
 let autoScroll = true;
@@ -180,9 +203,16 @@ function streamResponse(message) {
             if (cursorEl) cursorEl.remove();
 
             // Render markdown once
-            const renderedText = textNode ? textNode.nodeValue : "";
-            bubble.innerHTML = marked.parse(renderedText);
-            resetUi();
+            const parsedHtml = marked.parse(textNode.nodeValue);
+            const sanitizedHtml = DOMPurify.sanitize(parsedHtml, SANITIZE_CONFIG);
+            bubble.innerHTML = sanitizedHtml;
+
+            input.disabled = false;
+            input.focus();
+            stopBtn.disabled = true;
+
+            evtSource.close();
+            currentStream = null;
         }
 
         if (data.type === "error") {
