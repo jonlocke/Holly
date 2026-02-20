@@ -11,6 +11,7 @@ client = Client(
 
 #MODEL = "gpt-oss:120b-cloud"
 MODEL = "qwen3:4b-16k"
+MAX_MESSAGE_LENGTH = 16000
 
 @app.route("/")
 def index():
@@ -21,9 +22,42 @@ def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@app.route("/stream")
+@app.route("/stream", methods=["POST"])
 def stream():
-    user_message = request.args.get("message")
+    payload = request.get_json(silent=True) or {}
+    user_message = payload.get("message")
+
+    if not isinstance(user_message, str) or not user_message.strip():
+        error_payload = {
+            "type": "error",
+            "error": "Invalid message: must be a non-empty string.",
+        }
+        return Response(
+            sse(error_payload),
+            status=400,
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    user_message = user_message.strip()
+
+    if len(user_message) > MAX_MESSAGE_LENGTH:
+        error_payload = {
+            "type": "error",
+            "error": f"Invalid message: exceeds max length ({MAX_MESSAGE_LENGTH} characters).",
+        }
+        return Response(
+            sse(error_payload),
+            status=400,
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     def generate():
         try:
@@ -62,4 +96,3 @@ def stream():
 
 if __name__ == "__main__":
     app.run(debug=True, threaded=True)
-
