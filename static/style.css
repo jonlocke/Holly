@@ -164,20 +164,55 @@ textarea:focus-visible {
     font-size: 12px;
 }
 
-textarea {
+
+.input-stack {
+    position: relative;
     flex: 1;
-    resize: none;
-    overflow: hidden;
+    min-height: 40px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+}
+
+.input-stack:focus-within {
+    border-color: #9ca3af;
+}
+
+.input-prediction,
+textarea {
+    width: 100%;
     min-height: 40px;
     max-height: 160px;
     padding: 10px 12px;
     font-size: 14px;
     line-height: 1.4;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    outline: none;
     font-family: inherit;
-    background: #fff;
+    box-sizing: border-box;
+}
+
+.input-prediction {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    white-space: pre-wrap;
+    overflow: hidden;
+}
+
+.input-prediction .typed {
+    color: transparent;
+}
+
+.input-prediction .suffix {
+    color: #9ca3af;
+}
+
+textarea {
+    position: relative;
+    resize: none;
+    overflow: hidden;
+    border: none;
+    outline: none;
+    background: transparent;
     color: var(--text);
 }
 
@@ -185,8 +220,12 @@ textarea::placeholder {
     color: var(--text-muted);
 }
 
-textarea:focus {
-    border-color: #9ca3af;
+.enter-submit-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-muted);
 }
 
 .input-bar button {
@@ -275,6 +314,7 @@ body.dark .assistant .bubble {
     color: #e5e7eb;
 }
 
+body.dark .input-stack,
 body.dark textarea,
 body.dark .input-bar button {
     background: #111827;
@@ -334,12 +374,17 @@ body.cyberpunk .assistant .bubble {
     color: #8cf7ff;
 }
 
+body.cyberpunk .input-stack,
 body.cyberpunk textarea,
 body.cyberpunk .input-bar button,
 body.cyberpunk .theme-btn {
     background: rgba(4, 0, 18, 0.85);
     border-color: #00eaff;
     color: #8cf7ff;
+}
+
+body.cyberpunk .input-prediction .suffix {
+    color: rgba(214, 123, 255, 0.8);
 }
 
 body.cyberpunk .theme-btn:hover,
