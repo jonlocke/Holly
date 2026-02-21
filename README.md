@@ -49,6 +49,12 @@ If needed, pull the model first:
 ollama pull nomic-embed-text
 ```
 
+
+### Chat commands
+
+- `/clear`: clears the current session knowledge base.
+- `/git <repository-url>`: clones a Git repository (for example `git@github.com:jonlocke/AImaster-linux.git`) and indexes repository text content into session RAG context.
+
 ### Safe defaults
 - **Local development**: keep `HOST=127.0.0.1` and set `FLASK_DEBUG=1` when you need the Flask debugger/reloader.
 - **Deployment**: keep `FLASK_DEBUG=0`, bind to the required interface with `HOST` (often `0.0.0.0` in containers), and set `PORT` from your runtime environment.
