@@ -3,6 +3,7 @@ from ollama import Client
 import json
 import logging
 import os
+from pathlib import Path
 import secrets
 import subprocess
 import tempfile
@@ -125,6 +126,66 @@ GIT_TEXT_EXTENSIONS = {
 
 _vector_store_lock = threading.Lock()
 _session_vector_store: dict[str, list[dict]] = {}
+_question_history_lock = threading.Lock()
+QUESTION_HISTORY_LIMIT = 200
+QUESTION_HISTORY_FILE = Path(
+    os.environ.get("QUESTION_HISTORY_FILE", Path(__file__).with_name("question_history.json"))
+)
+
+
+def _load_question_history() -> dict[str, list[str]]:
+    if not QUESTION_HISTORY_FILE.exists():
+        return {}
+
+    try:
+        with QUESTION_HISTORY_FILE.open("r", encoding="utf-8") as history_file:
+            payload = json.load(history_file)
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Unable to read question history file '%s'.", QUESTION_HISTORY_FILE)
+        return {}
+
+    if not isinstance(payload, dict):
+        return {}
+
+    history: dict[str, list[str]] = {}
+    for session_id, entries in payload.items():
+        if not isinstance(session_id, str) or not isinstance(entries, list):
+            continue
+
+        valid_entries = [entry for entry in entries if isinstance(entry, str) and entry.strip()]
+        if valid_entries:
+            history[session_id] = valid_entries[-QUESTION_HISTORY_LIMIT:]
+
+    return history
+
+
+def _save_question_history(history: dict[str, list[str]]) -> None:
+    QUESTION_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with QUESTION_HISTORY_FILE.open("w", encoding="utf-8") as history_file:
+        json.dump(history, history_file, ensure_ascii=False, indent=2)
+
+
+def _append_question_history(session_id: str, question: str) -> None:
+    cleaned_question = question.strip()
+    if not cleaned_question:
+        return
+
+    with _question_history_lock:
+        history = _load_question_history()
+        session_history = history.get(session_id, [])
+
+        if session_history and session_history[-1] == cleaned_question:
+            return
+
+        session_history.append(cleaned_question)
+        history[session_id] = session_history[-QUESTION_HISTORY_LIMIT:]
+        _save_question_history(history)
+
+
+def _get_question_history(session_id: str) -> list[str]:
+    with _question_history_lock:
+        history = _load_question_history()
+        return history.get(session_id, [])
 
 
 def _vector_store_stats() -> dict:
@@ -436,6 +497,12 @@ def upload_file():
     )
 
 
+@app.route("/question-history", methods=["GET"])
+def get_question_history():
+    session_id = _get_session_id()
+    return jsonify({"history": _get_question_history(session_id)})
+
+
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -461,6 +528,7 @@ def stream():
         )
 
     user_message = user_message.strip()
+    _append_question_history(session_id=_get_session_id(), question=user_message)
 
     if user_message == "/help":
         return Response(
