@@ -13,7 +13,7 @@
     <div class="chat-container" id="output"></div>
 
     <form id="chat-form" class="input-bar">
-	<button id="theme-toggle" class="theme-btn">🌙</button>
+		<button type="button" id="theme-toggle" class="theme-btn" aria-label="Switch to cyberpunk theme">🛸 Cyberpunk</button>
         <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
         <button type="button" id="upload-btn">Upload</button>
         <textarea 
@@ -85,8 +85,35 @@ input.addEventListener("input", () => {
 
 /* ---------------- Theme Toggle ---------------- */
 
+function setTheme(themeName) {
+    document.body.classList.remove("dark", "cyberpunk");
+
+    if (themeName === "dark") {
+        document.body.classList.add("dark");
+    }
+
+    if (themeName === "cyberpunk") {
+        document.body.classList.add("cyberpunk");
+    }
+
+    const isCyberpunk = themeName === "cyberpunk";
+    themeToggle.textContent = isCyberpunk ? "☀️ Default" : "🛸 Cyberpunk";
+    themeToggle.setAttribute(
+        "aria-label",
+        isCyberpunk ? "Switch to default theme" : "Switch to cyberpunk theme"
+    );
+
+    localStorage.setItem("theme", themeName);
+}
+
+const savedTheme = localStorage.getItem("theme");
+setTheme(savedTheme === "cyberpunk" ? "cyberpunk" : "default");
+
 themeToggle.addEventListener("click", () => {
-    document.body.classList.toggle("dark");
+    const nextTheme = document.body.classList.contains("cyberpunk")
+        ? "default"
+        : "cyberpunk";
+    setTheme(nextTheme);
 });
 
 /* ---------------- Stop Button ---------------- */
