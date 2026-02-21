@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import secrets
+import subprocess
+import tempfile
 import threading
 from urllib.parse import urlparse
 
@@ -102,6 +104,18 @@ CHUNK_SIZE = 900
 CHUNK_OVERLAP = 150
 EMBED_MODEL = OLLAMA_EMBED_MODEL
 RAG_RESULTS = 4
+MAX_GIT_FILES = 1000
+MAX_GIT_FILE_SIZE_BYTES = 512 * 1024
+MAX_GIT_TOTAL_TEXT_BYTES = 2 * 1024 * 1024
+
+GIT_TEXT_EXTENSIONS = {
+    ".txt", ".md", ".rst", ".adoc", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".env", ".xml", ".csv", ".tsv", ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs",
+    ".java", ".kt", ".swift", ".c", ".cc", ".cpp", ".h", ".hpp", ".m", ".mm", ".rb",
+    ".php", ".sh", ".bash", ".zsh", ".ps1", ".sql", ".html", ".htm", ".css", ".scss",
+    ".sass", ".less", ".vue", ".svelte", ".dockerfile", ".gitignore", ".gitattributes",
+    ".lock", ".properties",
+}
 
 _vector_store_lock = threading.Lock()
 _session_vector_store: dict[str, list[dict]] = {}
@@ -217,6 +231,118 @@ def _retrieve_context(session_id: str, user_message: str) -> str:
 
     return "\n\n".join([f"[Context {idx + 1}] {text}" for idx, text in enumerate(selected)])
 
+
+def _is_probably_text_file(path: str) -> bool:
+    extension = os.path.splitext(path)[1].lower()
+    if extension in GIT_TEXT_EXTENSIONS:
+        return True
+
+    basename = os.path.basename(path).lower()
+    return basename in {"dockerfile", "makefile", "readme", "license"}
+
+
+def _load_git_repo_texts(repo_path: str) -> tuple[list[str], int, int]:
+    texts = []
+    total_files = 0
+    total_bytes = 0
+
+    for root, dirs, files in os.walk(repo_path):
+        dirs[:] = [dir_name for dir_name in dirs if dir_name != ".git"]
+
+        for filename in files:
+            if total_files >= MAX_GIT_FILES or total_bytes >= MAX_GIT_TOTAL_TEXT_BYTES:
+                return texts, total_files, total_bytes
+
+            absolute_path = os.path.join(root, filename)
+            relative_path = os.path.relpath(absolute_path, repo_path)
+            total_files += 1
+
+            if not _is_probably_text_file(absolute_path):
+                continue
+
+            try:
+                file_size = os.path.getsize(absolute_path)
+            except OSError:
+                continue
+
+            if file_size > MAX_GIT_FILE_SIZE_BYTES:
+                continue
+
+            try:
+                with open(absolute_path, "r", encoding="utf-8") as repo_file:
+                    content = repo_file.read()
+            except (UnicodeDecodeError, OSError):
+                continue
+
+            content = content.strip()
+            if not content:
+                continue
+
+            remaining = MAX_GIT_TOTAL_TEXT_BYTES - total_bytes
+            if remaining <= 0:
+                return texts, total_files, total_bytes
+
+            limited_content = content[:remaining]
+            total_bytes += len(limited_content)
+            texts.append(f"File: {relative_path}\n\n{limited_content}")
+
+    return texts, total_files, total_bytes
+
+
+def _index_git_repository(session_id: str, repo_url: str) -> tuple[int, int]:
+    with tempfile.TemporaryDirectory(prefix="clyde-git-") as clone_parent:
+        clone_path = os.path.join(clone_parent, "repo")
+        subprocess.run(
+            ["git", "clone", "--depth", "1", repo_url, clone_path],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        texts, scanned_files, total_text_bytes = _load_git_repo_texts(clone_path)
+        if not texts:
+            raise ValueError("No UTF-8 text files were found to index in the repository.")
+
+        chunks = []
+        for text in texts:
+            chunks.extend(_chunk_text(text))
+
+        if not chunks:
+            raise ValueError("Repository files were read but no indexable chunks were produced.")
+
+        try:
+            vectors = _embed_texts(chunks)
+        except Exception as exc:
+            if _is_embedding_not_supported_error(exc):
+                logger.warning(
+                    "Embedding model '%s' does not support embeddings; indexing repository '%s' without vectors.",
+                    EMBED_MODEL,
+                    repo_url,
+                )
+                vectors = [None] * len(chunks)
+            else:
+                logger.exception("Failed to embed git repository '%s'.", repo_url)
+                raise RuntimeError(
+                    "Unable to embed cloned repository right now. "
+                    f"Embedding service error: {exc}"
+                ) from exc
+
+        docs = [{"text": chunk, "embedding": vector} for chunk, vector in zip(chunks, vectors)]
+
+        with _vector_store_lock:
+            existing = _session_vector_store.get(session_id, [])
+            _session_vector_store[session_id] = existing + docs
+
+    logger.info(
+        "Indexed git repository '%s': scanned=%d, text_bytes=%d, chunks=%d",
+        repo_url,
+        scanned_files,
+        total_text_bytes,
+        len(chunks),
+    )
+    return scanned_files, len(chunks)
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -329,6 +455,74 @@ def stream():
             },
         )
 
+    session_id = _get_session_id()
+
+    if user_message.startswith("/git"):
+        parts = user_message.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            return Response(
+                sse({"type": "error", "error": "Usage: /git <repository-url>"}),
+                status=400,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        repo_url = parts[1].strip()
+
+        try:
+            scanned_files, indexed_chunks = _index_git_repository(session_id, repo_url)
+            return Response(
+                sse(
+                    {
+                        "type": "token",
+                        "content": (
+                            f"Indexed repository '{repo_url}'. "
+                            f"Scanned {scanned_files} files and stored {indexed_chunks} chunks for RAG queries."
+                        ),
+                    }
+                )
+                + sse({"type": "done"}),
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        except subprocess.TimeoutExpired:
+            return Response(
+                sse({"type": "error", "error": "Git clone timed out while fetching the repository."}),
+                status=504,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        except subprocess.CalledProcessError as exc:
+            details = (exc.stderr or exc.stdout or str(exc)).strip()
+            return Response(
+                sse({"type": "error", "error": f"Git clone failed: {details}"}),
+                status=400,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        except (ValueError, RuntimeError) as exc:
+            return Response(
+                sse({"type": "error", "error": str(exc)}),
+                status=400,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
     if len(user_message) > MAX_MESSAGE_LENGTH:
         error_payload = {
             "type": "error",
@@ -343,8 +537,6 @@ def stream():
                 "X-Accel-Buffering": "no",
             },
         )
-
-    session_id = _get_session_id()
 
     def generate():
         try:
