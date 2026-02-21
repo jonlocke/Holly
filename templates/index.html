@@ -8,6 +8,7 @@
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
 </head>
 <body>
+<canvas id="ascii-rain" class="ascii-rain" aria-hidden="true"></canvas>
 
 <div class="app">
     <div class="chat-container" id="output"></div>
@@ -35,6 +36,69 @@ const stopBtn = document.getElementById("stop-btn");
 const themeToggle = document.getElementById("theme-toggle");
 const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
+const asciiRainCanvas = document.getElementById("ascii-rain");
+
+const rainCtx = asciiRainCanvas.getContext("2d");
+const rainChars = "アカサタナハマヤラワ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ#$%&*+-<>";
+const rainFontSize = 16;
+let rainDrops = [];
+let rainColumns = 0;
+let rainInterval = null;
+
+function setupRainCanvas() {
+    asciiRainCanvas.width = window.innerWidth;
+    asciiRainCanvas.height = window.innerHeight;
+    rainColumns = Math.floor(asciiRainCanvas.width / rainFontSize);
+    rainDrops = Array.from({ length: rainColumns }, () => Math.floor(Math.random() * -40));
+}
+
+function drawRainFrame() {
+    if (!document.body.classList.contains("cyberpunk")) {
+        return;
+    }
+
+    rainCtx.fillStyle = "rgba(3, 0, 10, 0.14)";
+    rainCtx.fillRect(0, 0, asciiRainCanvas.width, asciiRainCanvas.height);
+
+    rainCtx.fillStyle = "rgba(0, 234, 255, 0.78)";
+    rainCtx.font = `${rainFontSize}px monospace`;
+
+    for (let columnIndex = 0; columnIndex < rainDrops.length; columnIndex++) {
+        const character = rainChars.charAt(Math.floor(Math.random() * rainChars.length));
+        const x = columnIndex * rainFontSize;
+        const y = rainDrops[columnIndex] * rainFontSize;
+
+        rainCtx.fillText(character, x, y);
+
+        if (y > asciiRainCanvas.height && Math.random() > 0.975) {
+            rainDrops[columnIndex] = Math.floor(Math.random() * -20);
+        }
+
+        rainDrops[columnIndex] += 1;
+    }
+}
+
+function stopRain() {
+    if (rainInterval) {
+        clearInterval(rainInterval);
+        rainInterval = null;
+    }
+    rainCtx.clearRect(0, 0, asciiRainCanvas.width, asciiRainCanvas.height);
+}
+
+function startRain() {
+    if (rainInterval) {
+        return;
+    }
+    setupRainCanvas();
+    rainInterval = setInterval(drawRainFrame, 40);
+}
+
+window.addEventListener("resize", () => {
+    if (document.body.classList.contains("cyberpunk")) {
+        setupRainCanvas();
+    }
+});
 
 const SANITIZE_CONFIG = {
     FORBID_TAGS: ["script"],
@@ -94,6 +158,9 @@ function setTheme(themeName) {
 
     if (themeName === "cyberpunk") {
         document.body.classList.add("cyberpunk");
+        startRain();
+    } else {
+        stopRain();
     }
 
     const isCyberpunk = themeName === "cyberpunk";
