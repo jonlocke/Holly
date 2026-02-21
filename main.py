@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LOCAL_OLLAMA_API_BASE = "http://localhost:11434"
 DEFAULT_LOCAL_OLLAMA_MODEL = "qwen3:4b-16k"
+DEFAULT_LOCAL_OLLAMA_EMBED_MODEL = "nomic-embed-text"
 
 
 def is_local_development() -> bool:
@@ -28,9 +29,10 @@ def _validate_ollama_api_base(value: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def load_ollama_config() -> tuple[str, str]:
+def load_ollama_config() -> tuple[str, str, str]:
     api_base = os.environ.get("OLLAMA_API_BASE", "").strip()
     model = os.environ.get("OLLAMA_MODEL", "").strip()
+    embed_model = os.environ.get("OLLAMA_EMBED_MODEL", "").strip()
 
     if is_local_development():
         if not api_base:
@@ -44,6 +46,12 @@ def load_ollama_config() -> tuple[str, str]:
             logger.warning(
                 "OLLAMA_MODEL is missing; defaulting to local development value '%s'.",
                 model,
+            )
+        if not embed_model:
+            embed_model = DEFAULT_LOCAL_OLLAMA_EMBED_MODEL
+            logger.warning(
+                "OLLAMA_EMBED_MODEL is missing; defaulting to local development value '%s'.",
+                embed_model,
             )
 
     errors = []
@@ -61,16 +69,28 @@ def load_ollama_config() -> tuple[str, str]:
             "OLLAMA_MODEL is required. Set it to an available model name (e.g. qwen3:4b-16k)."
         )
 
+    if not embed_model:
+        embed_model = DEFAULT_LOCAL_OLLAMA_EMBED_MODEL
+        logger.info(
+            "OLLAMA_EMBED_MODEL is missing; defaulting to '%s' for retrieval.",
+            embed_model,
+        )
+
     if errors:
         for error in errors:
             logger.error(error)
         raise RuntimeError("Invalid Ollama configuration. See startup errors above.")
 
-    logger.info("Using OLLAMA_API_BASE=%s and OLLAMA_MODEL=%s", api_base, model)
-    return api_base, model
+    logger.info(
+        "Using OLLAMA_API_BASE=%s, OLLAMA_MODEL=%s, and OLLAMA_EMBED_MODEL=%s",
+        api_base,
+        model,
+        embed_model,
+    )
+    return api_base, model, embed_model
 
 
-OLLAMA_API_BASE, OLLAMA_MODEL = load_ollama_config()
+OLLAMA_API_BASE, OLLAMA_MODEL, OLLAMA_EMBED_MODEL = load_ollama_config()
 client = Client(host=OLLAMA_API_BASE)
 
 #MODEL = "gpt-oss:120b-cloud"
@@ -80,7 +100,7 @@ MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024
 MAX_FILE_TEXT_LENGTH = 100000
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 150
-EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", OLLAMA_MODEL)
+EMBED_MODEL = OLLAMA_EMBED_MODEL
 RAG_RESULTS = 4
 
 _vector_store_lock = threading.Lock()
@@ -117,6 +137,11 @@ def _chunk_text(text: str) -> list[str]:
 
 
 def _embed_texts(chunks: list[str]) -> list[list[float]]:
+    embed = getattr(client, "embed", None)
+    if callable(embed):
+        response = embed(model=EMBED_MODEL, input=chunks)
+        return response["embeddings"]
+
     vectors = []
     for chunk in chunks:
         response = client.embeddings(model=EMBED_MODEL, prompt=chunk)
@@ -140,7 +165,7 @@ def _retrieve_context(session_id: str, user_message: str) -> str:
     if not docs:
         return ""
 
-    query_vector = client.embeddings(model=EMBED_MODEL, prompt=user_message)["embedding"]
+    query_vector = _embed_texts([user_message])[0]
     ranked = sorted(
         docs,
         key=lambda doc: _cosine_similarity(query_vector, doc["embedding"]),
