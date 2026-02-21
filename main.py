@@ -186,7 +186,21 @@ def upload_file():
     if not chunks:
         return jsonify({"error": "Unable to chunk file content."}), 400
 
-    vectors = _embed_texts(chunks)
+    try:
+        vectors = _embed_texts(chunks)
+    except Exception as exc:
+        logger.exception("Failed to embed uploaded file '%s'.", uploaded_file.filename)
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "Unable to process uploaded file right now. "
+                        f"Embedding service error: {exc}"
+                    )
+                }
+            ),
+            502,
+        )
     session_id = _get_session_id()
     docs = [{"text": chunk, "embedding": vector} for chunk, vector in zip(chunks, vectors)]
 
