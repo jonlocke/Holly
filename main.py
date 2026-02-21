@@ -124,6 +124,19 @@ def _embed_texts(chunks: list[str]) -> list[list[float]]:
     return vectors
 
 
+def _is_embedding_not_supported_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "support embeddings" in message or "does not support embeddings" in message
+
+
+def _keyword_overlap_score(query: str, text: str) -> int:
+    query_terms = set(query.lower().split())
+    if not query_terms:
+        return 0
+    text_terms = set(text.lower().split())
+    return len(query_terms & text_terms)
+
+
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     mag_a = sqrt(sum(x * x for x in a))
@@ -140,12 +153,33 @@ def _retrieve_context(session_id: str, user_message: str) -> str:
     if not docs:
         return ""
 
-    query_vector = client.embeddings(model=EMBED_MODEL, prompt=user_message)["embedding"]
-    ranked = sorted(
-        docs,
-        key=lambda doc: _cosine_similarity(query_vector, doc["embedding"]),
-        reverse=True,
-    )
+    use_vector_search = all(doc.get("embedding") for doc in docs)
+
+    if use_vector_search:
+        try:
+            query_vector = client.embeddings(model=EMBED_MODEL, prompt=user_message)["embedding"]
+            ranked = sorted(
+                docs,
+                key=lambda doc: _cosine_similarity(query_vector, doc["embedding"]),
+                reverse=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Falling back to keyword retrieval because embedding lookup failed: %s",
+                exc,
+            )
+            ranked = sorted(
+                docs,
+                key=lambda doc: _keyword_overlap_score(user_message, doc["text"]),
+                reverse=True,
+            )
+    else:
+        ranked = sorted(
+            docs,
+            key=lambda doc: _keyword_overlap_score(user_message, doc["text"]),
+            reverse=True,
+        )
+
     selected = [entry["text"] for entry in ranked[:RAG_RESULTS]]
     if not selected:
         return ""
@@ -189,18 +223,26 @@ def upload_file():
     try:
         vectors = _embed_texts(chunks)
     except Exception as exc:
-        logger.exception("Failed to embed uploaded file '%s'.", uploaded_file.filename)
-        return (
-            jsonify(
-                {
-                    "error": (
-                        "Unable to process uploaded file right now. "
-                        f"Embedding service error: {exc}"
-                    )
-                }
-            ),
-            502,
-        )
+        if _is_embedding_not_supported_error(exc):
+            logger.warning(
+                "Embedding model '%s' does not support embeddings; indexing '%s' without vectors.",
+                EMBED_MODEL,
+                uploaded_file.filename,
+            )
+            vectors = [None] * len(chunks)
+        else:
+            logger.exception("Failed to embed uploaded file '%s'.", uploaded_file.filename)
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "Unable to process uploaded file right now. "
+                            f"Embedding service error: {exc}"
+                        )
+                    }
+                ),
+                502,
+            )
     session_id = _get_session_id()
     docs = [{"text": chunk, "embedding": vector} for chunk, vector in zip(chunks, vectors)]
 
