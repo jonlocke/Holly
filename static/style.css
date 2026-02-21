@@ -273,6 +273,61 @@ body.dark .chat-container::-webkit-scrollbar-thumb {
     background-clip: content-box;
 }
 
+
+/* ---------- Cyberpunk Theme ---------- */
+
+body.cyberpunk {
+    --bg: #05010f;
+    --surface: #120624;
+    --surface-muted: #1a0c33;
+    --border: #00eaff;
+    --text: #8cf7ff;
+    --text-muted: #d67bff;
+    --focus-ring: #ff2ed1;
+    background-image:
+        radial-gradient(circle at 10% 20%, rgba(255, 46, 209, 0.15), transparent 30%),
+        radial-gradient(circle at 80% 0%, rgba(0, 234, 255, 0.16), transparent 25%);
+}
+
+body.cyberpunk .app {
+    border-color: #00eaff;
+    box-shadow: 0 0 18px rgba(0, 234, 255, 0.45), 0 0 28px rgba(255, 46, 209, 0.2);
+}
+
+body.cyberpunk .header,
+body.cyberpunk .input-bar {
+    border-color: #00eaff;
+}
+
+body.cyberpunk .user .bubble {
+    background: linear-gradient(120deg, #ff2ed1, #af2bff);
+    color: #fff;
+}
+
+body.cyberpunk .assistant .bubble {
+    background: rgba(0, 234, 255, 0.08);
+    border-color: #00eaff;
+    color: #8cf7ff;
+}
+
+body.cyberpunk textarea,
+body.cyberpunk .input-bar button,
+body.cyberpunk .theme-btn {
+    background: rgba(4, 0, 18, 0.85);
+    border-color: #00eaff;
+    color: #8cf7ff;
+}
+
+body.cyberpunk .theme-btn:hover,
+body.cyberpunk .input-bar button:hover {
+    background: rgba(255, 46, 209, 0.2);
+}
+
+body.cyberpunk .cursor,
+body.cyberpunk .typing span {
+    background: #ff2ed1;
+}
+
 /* ---------- Responsive ---------- */
 
 @media (max-width: 768px) {
