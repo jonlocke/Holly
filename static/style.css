@@ -140,10 +140,22 @@ textarea:focus-visible {
 
 .input-bar {
     display: flex;
-    gap: 8px;
+    flex-direction: column;
+    gap: 10px;
     padding: 16px;
     border-top: 1px solid #e5e7eb;
     background: var(--surface-muted);
+}
+
+.primary-controls,
+.secondary-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.secondary-controls {
+    flex-wrap: wrap;
 }
 
 
@@ -362,6 +374,18 @@ body.cyberpunk .typing span {
 
     .bubble {
         max-width: 88%;
+    }
+
+    .primary-controls,
+    .secondary-controls {
+        flex-wrap: wrap;
+    }
+
+    .primary-controls button,
+    .secondary-controls button,
+    .input-bar input[type="file"] {
+        width: 100%;
+        max-width: 100%;
     }
 }
 

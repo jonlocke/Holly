@@ -14,17 +14,22 @@
     <div class="chat-container" id="output"></div>
 
     <form id="chat-form" class="input-bar">
-		<button type="button" id="theme-toggle" class="theme-btn" aria-label="Switch to cyberpunk theme">🛸 Cyberpunk</button>
-        <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
-        <button type="button" id="upload-btn">Upload</button>
-        <textarea 
-            id="user-input" 
-            rows="1" 
-            placeholder="Ask anything... (use /clear to wipe uploaded context)"
-        ></textarea>
+        <div class="primary-controls">
+            <textarea
+                id="user-input"
+                rows="1"
+                placeholder="Ask anything... (use /clear to wipe uploaded context)"
+            ></textarea>
 
-        <button type="submit">Send</button>
-        <button type="button" id="stop-btn" disabled>Stop</button>
+            <button type="submit">Send</button>
+            <button type="button" id="stop-btn" disabled>Stop</button>
+        </div>
+
+        <div class="secondary-controls">
+            <button type="button" id="theme-toggle" class="theme-btn" aria-label="Switch to cyberpunk theme">🛸 Cyberpunk</button>
+            <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
+            <button type="button" id="upload-btn">Upload</button>
+        </div>
     </form>
 </div>
 
