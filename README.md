@@ -54,6 +54,7 @@ ollama pull nomic-embed-text
 
 - `/clear`: clears the current session knowledge base.
 - `/git <repository-url>`: clones a Git repository (for example `git@github.com:jonlocke/AImaster-linux.git`) and indexes repository text content into session RAG context.
+- `/vectordb`: shows in-memory vector store size (total indexed chunks) and open sessions with indexed chunk counts.
 
 ### Safe defaults
 - **Local development**: keep `HOST=127.0.0.1` and set `FLASK_DEBUG=1` when you need the Flask debugger/reloader.
