@@ -138,6 +138,12 @@ textarea:focus-visible {
     background: var(--surface-muted);
 }
 
+
+.input-bar input[type="file"] {
+    max-width: 200px;
+    font-size: 12px;
+}
+
 textarea {
     flex: 1;
     resize: none;

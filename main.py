@@ -1,11 +1,16 @@
-from flask import Flask, render_template, request, Response
+from flask import Flask, render_template, request, Response, jsonify, session
 from ollama import Client
 import json
 import logging
 import os
+import secrets
+import threading
 from urllib.parse import urlparse
 
+from math import sqrt
+
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +76,129 @@ client = Client(host=OLLAMA_API_BASE)
 #MODEL = "gpt-oss:120b-cloud"
 MODEL = "qwen3:4b-16k"
 MAX_MESSAGE_LENGTH = 16000
+MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024
+MAX_FILE_TEXT_LENGTH = 100000
+CHUNK_SIZE = 900
+CHUNK_OVERLAP = 150
+EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", OLLAMA_MODEL)
+RAG_RESULTS = 4
+
+_vector_store_lock = threading.Lock()
+_session_vector_store: dict[str, list[dict]] = {}
+
+
+def _get_session_id() -> str:
+    session_id = session.get("session_id")
+    if not session_id:
+        session_id = secrets.token_hex(16)
+        session["session_id"] = session_id
+    return session_id
+
+
+def _chunk_text(text: str) -> list[str]:
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return []
+
+    chunks = []
+    start = 0
+    step = CHUNK_SIZE - CHUNK_OVERLAP
+
+    while start < len(cleaned):
+        end = min(start + CHUNK_SIZE, len(cleaned))
+        chunk = cleaned[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= len(cleaned):
+            break
+        start += step
+
+    return chunks
+
+
+def _embed_texts(chunks: list[str]) -> list[list[float]]:
+    vectors = []
+    for chunk in chunks:
+        response = client.embeddings(model=EMBED_MODEL, prompt=chunk)
+        vectors.append(response["embedding"])
+    return vectors
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    mag_a = sqrt(sum(x * x for x in a))
+    mag_b = sqrt(sum(y * y for y in b))
+    if mag_a == 0 or mag_b == 0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
+def _retrieve_context(session_id: str, user_message: str) -> str:
+    with _vector_store_lock:
+        docs = _session_vector_store.get(session_id, [])
+
+    if not docs:
+        return ""
+
+    query_vector = client.embeddings(model=EMBED_MODEL, prompt=user_message)["embedding"]
+    ranked = sorted(
+        docs,
+        key=lambda doc: _cosine_similarity(query_vector, doc["embedding"]),
+        reverse=True,
+    )
+    selected = [entry["text"] for entry in ranked[:RAG_RESULTS]]
+    if not selected:
+        return ""
+
+    return "\n\n".join([f"[Context {idx + 1}] {text}" for idx, text in enumerate(selected)])
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided."}), 400
+
+    uploaded_file = request.files["file"]
+    if uploaded_file.filename == "":
+        return jsonify({"error": "No file selected."}), 400
+
+    raw_content = uploaded_file.read(MAX_FILE_SIZE_BYTES + 1)
+    if len(raw_content) > MAX_FILE_SIZE_BYTES:
+        return jsonify({"error": "File too large (max 2MB)."}), 400
+
+    try:
+        text = raw_content.decode("utf-8")
+    except UnicodeDecodeError:
+        return jsonify({"error": "Only UTF-8 text files are supported."}), 400
+
+    text = text.strip()
+    if not text:
+        return jsonify({"error": "Uploaded file is empty."}), 400
+
+    if len(text) > MAX_FILE_TEXT_LENGTH:
+        text = text[:MAX_FILE_TEXT_LENGTH]
+
+    chunks = _chunk_text(text)
+    if not chunks:
+        return jsonify({"error": "Unable to chunk file content."}), 400
+
+    vectors = _embed_texts(chunks)
+    session_id = _get_session_id()
+    docs = [{"text": chunk, "embedding": vector} for chunk, vector in zip(chunks, vectors)]
+
+    with _vector_store_lock:
+        _session_vector_store[session_id] = docs
+
+    return jsonify(
+        {
+            "message": f"Indexed '{uploaded_file.filename}' with {len(chunks)} chunks.",
+            "chunks": len(chunks),
+        }
+    )
 
 
 def sse(data: dict) -> str:
@@ -103,6 +227,21 @@ def stream():
 
     user_message = user_message.strip()
 
+    if user_message == "/clear":
+        session_id = _get_session_id()
+        with _vector_store_lock:
+            _session_vector_store.pop(session_id, None)
+
+        return Response(
+            sse({"type": "token", "content": "Knowledge base cleared for this session."})
+            + sse({"type": "done"}),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     if len(user_message) > MAX_MESSAGE_LENGTH:
         error_payload = {
             "type": "error",
@@ -118,11 +257,23 @@ def stream():
             },
         )
 
+    session_id = _get_session_id()
+
     def generate():
         try:
+            context = _retrieve_context(session_id, user_message)
+
+            final_prompt = user_message
+            if context:
+                final_prompt = (
+                    "Use the provided context to answer the user's question. "
+                    "If context is not relevant, respond normally.\n\n"
+                    f"{context}\n\nUser question: {user_message}"
+                )
+
             stream = client.chat(
                 model=OLLAMA_MODEL,
-                messages=[{"role": "user", "content": user_message}],
+                messages=[{"role": "user", "content": final_prompt}],
                 stream=True,
             )
 
