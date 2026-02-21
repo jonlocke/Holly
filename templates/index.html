@@ -14,10 +14,12 @@
 
     <form id="chat-form" class="input-bar">
 	<button id="theme-toggle" class="theme-btn">🌙</button>
+        <input id="file-input" type="file" accept=".txt,.md,.csv,.json" />
+        <button type="button" id="upload-btn">Upload</button>
         <textarea 
             id="user-input" 
             rows="1" 
-            placeholder="Ask anything..."
+            placeholder="Ask anything... (use /clear to wipe uploaded context)"
         ></textarea>
 
         <button type="submit">Send</button>
@@ -31,6 +33,8 @@ const input = document.getElementById("user-input");
 const output = document.getElementById("output");
 const stopBtn = document.getElementById("stop-btn");
 const themeToggle = document.getElementById("theme-toggle");
+const fileInput = document.getElementById("file-input");
+const uploadBtn = document.getElementById("upload-btn");
 
 const SANITIZE_CONFIG = {
     FORBID_TAGS: ["script"],
@@ -94,6 +98,40 @@ stopBtn.addEventListener("click", () => {
     }
     stopBtn.disabled = true;
     input.disabled = false;
+});
+
+uploadBtn.addEventListener("click", async () => {
+    const file = fileInput.files?.[0];
+    if (!file) {
+        appendMessage("Please select a file before uploading.", "assistant");
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = "Uploading...";
+
+    try {
+        const response = await fetch("/upload", {
+            method: "POST",
+            body: formData,
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload.error || "Upload failed.");
+        }
+
+        appendMessage(payload.message, "assistant");
+        fileInput.value = "";
+    } catch (error) {
+        appendMessage(`Upload error: ${error.message}`, "assistant");
+    } finally {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = "Upload";
+    }
 });
 
 /* ---------------- Message Trim ---------------- */
