@@ -121,6 +121,22 @@ _vector_store_lock = threading.Lock()
 _session_vector_store: dict[str, list[dict]] = {}
 
 
+def _vector_store_stats() -> dict:
+    with _vector_store_lock:
+        sessions = {
+            sid: len(docs)
+            for sid, docs in _session_vector_store.items()
+            if docs
+        }
+
+    total_chunks = sum(sessions.values())
+    return {
+        "total_chunks": total_chunks,
+        "open_sessions": len(sessions),
+        "session_chunk_counts": sessions,
+    }
+
+
 def _get_session_id() -> str:
     session_id = session.get("session_id")
     if not session_id:
@@ -447,6 +463,39 @@ def stream():
 
         return Response(
             sse({"type": "token", "content": "Knowledge base cleared for this session."})
+            + sse({"type": "done"}),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    if user_message == "/vectordb":
+        stats = _vector_store_stats()
+        session_lines = [
+            f"- {sid}: {count} chunks"
+            for sid, count in sorted(
+                stats["session_chunk_counts"].items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+        ]
+        sessions_summary = "\n".join(session_lines) if session_lines else "- none"
+
+        return Response(
+            sse(
+                {
+                    "type": "token",
+                    "content": (
+                        "Vector DB stats:\n"
+                        f"- total chunks: {stats['total_chunks']}\n"
+                        f"- open sessions: {stats['open_sessions']}\n"
+                        "- sessions:\n"
+                        f"{sessions_summary}"
+                    ),
+                }
+            )
             + sse({"type": "done"}),
             mimetype="text/event-stream",
             headers={
