@@ -14,7 +14,7 @@
 
     <form id="chat-form" class="input-bar">
 	<button id="theme-toggle" class="theme-btn">🌙</button>
-        <input id="file-input" type="file" accept=".txt,.md,.csv,.json" />
+        <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
         <button type="button" id="upload-btn">Upload</button>
         <textarea 
             id="user-input" 
@@ -119,12 +119,17 @@ uploadBtn.addEventListener("click", async () => {
             body: formData,
         });
 
-        const payload = await response.json();
+        const contentType = response.headers.get("content-type") || "";
+        const isJson = contentType.includes("application/json");
+        const payload = isJson ? await response.json() : null;
         if (!response.ok) {
-            throw new Error(payload.error || "Upload failed.");
+            const fallbackError = isJson
+                ? (payload?.error || "Upload failed.")
+                : `Upload failed with status ${response.status}.`;
+            throw new Error(fallbackError);
         }
 
-        appendMessage(payload.message, "assistant");
+        appendMessage(payload?.message || "Upload complete.", "assistant");
         fileInput.value = "";
     } catch (error) {
         appendMessage(`Upload error: ${error.message}`, "assistant");
