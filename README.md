@@ -37,6 +37,17 @@ Both `main.py` and `main-cyberpunk.py` now read startup settings from environmen
 - `FLASK_DEBUG` (default: `0`)
 - `HOST` (default: `127.0.0.1`)
 - `PORT` (default: `5000`)
+- `OLLAMA_EMBED_MODEL` (default: `nomic-embed-text` for RAG embedding in `main.py`)
+
+### RAG embedding model
+
+RAG ingestion/retrieval in `main.py` is configured to use `OLLAMA_EMBED_MODEL`, defaulting to `nomic-embed-text` so it can be used without extra setup in local development.
+
+If needed, pull the model first:
+
+```bash
+ollama pull nomic-embed-text
+```
 
 ### Safe defaults
 - **Local development**: keep `HOST=127.0.0.1` and set `FLASK_DEBUG=1` when you need the Flask debugger/reloader.
@@ -47,4 +58,3 @@ Example:
 ```bash
 FLASK_DEBUG=1 HOST=127.0.0.1 PORT=5000 python main.py
 ```
-
