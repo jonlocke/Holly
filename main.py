@@ -108,6 +108,12 @@ MAX_GIT_FILES = 1000
 MAX_GIT_FILE_SIZE_BYTES = 512 * 1024
 MAX_GIT_TOTAL_TEXT_BYTES = 2 * 1024 * 1024
 
+HELP_MESSAGE = """Available commands:
+- /help: Show available slash commands and what they do.
+- /clear: Clear uploaded knowledge/context for your current session.
+- /vectordb: Show in-memory vector database statistics.
+- /git <repository-url>: Clone and index a repository for RAG queries in this session."""
+
 GIT_TEXT_EXTENSIONS = {
     ".txt", ".md", ".rst", ".adoc", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
     ".env", ".xml", ".csv", ".tsv", ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs",
@@ -455,6 +461,16 @@ def stream():
         )
 
     user_message = user_message.strip()
+
+    if user_message == "/help":
+        return Response(
+            sse({"type": "token", "content": HELP_MESSAGE}) + sse({"type": "done"}),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     if user_message == "/clear":
         session_id = _get_session_id()
