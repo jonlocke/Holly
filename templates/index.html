@@ -15,17 +15,25 @@
 
     <form id="chat-form" class="input-bar">
         <div class="primary-controls">
-            <textarea
-                id="user-input"
-                rows="1"
-                placeholder="Ask anything... (use /clear to wipe uploaded context)"
-            ></textarea>
+            <div class="input-stack">
+                <div id="input-prediction" class="input-prediction"></div>
+                <textarea
+                    id="user-input"
+                    rows="1"
+                    placeholder="Ask anything... (use /clear to wipe uploaded context)"
+                ></textarea>
+            </div>
 
             <button type="submit">Send</button>
             <button type="button" id="stop-btn" disabled>Stop</button>
         </div>
 
         <div class="secondary-controls">
+            <label class="enter-submit-toggle" for="enter-submit-toggle">
+                <input id="enter-submit-toggle" type="checkbox" checked />
+                Enter submits
+            </label>
+
             <button type="button" id="theme-toggle" class="theme-btn" aria-label="Switch to cyberpunk theme">🛸 Cyberpunk</button>
             <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
             <button type="button" id="upload-btn">Upload</button>
@@ -37,10 +45,12 @@
 const form = document.getElementById("chat-form");
 const input = document.getElementById("user-input");
 const output = document.getElementById("output");
+const prediction = document.getElementById("input-prediction");
 const stopBtn = document.getElementById("stop-btn");
 const themeToggle = document.getElementById("theme-toggle");
 const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
+const enterSubmitToggle = document.getElementById("enter-submit-toggle");
 const asciiRainCanvas = document.getElementById("ascii-rain");
 
 const rainCtx = asciiRainCanvas.getContext("2d");
@@ -129,6 +139,8 @@ if (isDevHost) {
 
 let currentStream = null;
 let autoScroll = true;
+let questionHistory = [];
+let historyCursor = -1;
 const MAX_MESSAGES = 100;
 
 /* ---------------- Scroll Lock ---------------- */
@@ -145,11 +157,139 @@ function safeScroll() {
     }
 }
 
-/* ---------------- Auto Resize ---------------- */
+/* ---------------- Input Helpers ---------------- */
 
-input.addEventListener("input", () => {
+function updateInputHeight() {
     input.style.height = "auto";
     input.style.height = input.scrollHeight + "px";
+    prediction.style.height = input.style.height;
+}
+
+function escapeHtml(value) {
+    return value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
+function getPredictionSuffix(value) {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+
+    const lowerTrimmed = trimmed.toLowerCase();
+    for (let index = questionHistory.length - 1; index >= 0; index--) {
+        const candidate = questionHistory[index];
+        if (candidate.toLowerCase().startsWith(lowerTrimmed) && candidate.length > trimmed.length) {
+            return candidate.slice(trimmed.length);
+        }
+    }
+
+    return "";
+}
+
+function updatePrediction() {
+    const typed = input.value;
+    const suffix = getPredictionSuffix(typed);
+    const typedHtml = `<span class="typed">${escapeHtml(typed)}</span>`;
+    const suffixHtml = suffix ? `<span class="suffix">${escapeHtml(suffix)}</span>` : "";
+    prediction.innerHTML = `${typedHtml}${suffixHtml}`;
+    prediction.scrollTop = input.scrollTop;
+}
+
+function setInputValue(value) {
+    input.value = value;
+    updateInputHeight();
+    updatePrediction();
+}
+
+function moveHistory(direction) {
+    if (!questionHistory.length) return;
+
+    if (historyCursor === -1) {
+        historyCursor = questionHistory.length;
+    }
+
+    historyCursor = Math.max(0, Math.min(questionHistory.length, historyCursor + direction));
+
+    if (historyCursor === questionHistory.length) {
+        setInputValue("");
+        return;
+    }
+
+    setInputValue(questionHistory[historyCursor]);
+}
+
+async function loadQuestionHistory() {
+    try {
+        const response = await fetch("/question-history");
+        if (!response.ok) return;
+
+        const payload = await response.json();
+        if (Array.isArray(payload.history)) {
+            questionHistory = payload.history;
+        }
+    } catch (error) {
+        console.warn("Unable to load question history", error);
+    }
+}
+
+input.addEventListener("input", () => {
+    historyCursor = -1;
+    updateInputHeight();
+    updatePrediction();
+});
+
+input.addEventListener("scroll", () => {
+    prediction.scrollTop = input.scrollTop;
+});
+
+input.addEventListener("keydown", (event) => {
+    if (event.key === "Tab") {
+        const suffix = getPredictionSuffix(input.value);
+        if (!suffix) return;
+
+        event.preventDefault();
+        setInputValue(input.value + suffix);
+        return;
+    }
+
+    if (event.key === "ArrowUp" && input.selectionStart === 0 && input.selectionEnd === 0) {
+        event.preventDefault();
+        moveHistory(-1);
+        return;
+    }
+
+    if (event.key === "ArrowDown" && input.selectionStart === input.value.length && input.selectionEnd === input.value.length) {
+        event.preventDefault();
+        moveHistory(1);
+        return;
+    }
+
+    if (event.key !== "Enter") {
+        return;
+    }
+
+    const shouldSubmitOnEnter = enterSubmitToggle.checked;
+
+    if (shouldSubmitOnEnter && !event.shiftKey) {
+        event.preventDefault();
+        form.requestSubmit();
+        return;
+    }
+
+    if (!shouldSubmitOnEnter && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        form.requestSubmit();
+    }
+});
+
+const savedEnterSubmitPreference = localStorage.getItem("enterSubmitEnabled");
+if (savedEnterSubmitPreference !== null) {
+    enterSubmitToggle.checked = savedEnterSubmitPreference === "true";
+}
+
+enterSubmitToggle.addEventListener("change", () => {
+    localStorage.setItem("enterSubmitEnabled", String(enterSubmitToggle.checked));
 });
 
 /* ---------------- Theme Toggle ---------------- */
@@ -273,8 +413,12 @@ form.addEventListener("submit", function(e) {
 
     appendMessage(message, "user");
 
-    input.value = "";
-    input.style.height = "auto";
+    if (!questionHistory.length || questionHistory[questionHistory.length - 1] !== message) {
+        questionHistory.push(message);
+    }
+
+    historyCursor = -1;
+    setInputValue("");
 
     streamResponse(message);
 });
@@ -436,6 +580,10 @@ function streamResponse(message) {
             });
         });
 }
+
+updateInputHeight();
+updatePrediction();
+loadQuestionHistory().then(updatePrediction);
 </script>
 
 </body>
