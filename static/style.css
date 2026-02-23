@@ -105,7 +105,7 @@ textarea:focus-visible {
     aspect-ratio: 1 / 1;
     background-image: url("/static/holly.png");
     background-repeat: no-repeat;
-    /* Crop each tall frame to the top square area so the label can sit right below it */
+    /* Each frame is tall; crop to square and shift down so the face isn't cut off. */
     background-size: 300% 200%;
     background-color: transparent;
     border: none;
@@ -113,15 +113,15 @@ textarea:focus-visible {
 }
 
 .avatar-waiting {
-    background-position: 0% 0%;
+    background-position: 0% 22%;
 }
 
 .avatar-thinking {
-    background-position: 50% 0%;
+    background-position: 50% 22%;
 }
 
 .avatar-smiling {
-    background-position: 100% 0%;
+    background-position: 100% 22%;
 }
 
 .avatar-brand {
