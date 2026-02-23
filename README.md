@@ -82,3 +82,42 @@ python main.py
 Notes:
 - The app will call `POST /v1/chat/completions` when `OLLAMA_BEARER_TOKEN` is set.
 - `OLLAMA_API_BASE` can be either the gateway root (`http://127.0.0.1:18789`) or `/v1` base (`http://127.0.0.1:18789/v1`).
+
+## Debian 13 package + systemd service
+
+Build a Debian package (tested flow for Debian 13/bookworm-trixie style tooling):
+
+```bash
+./scripts/package-deb.sh
+```
+
+Optional build variables:
+
+- `VERSION=1.2.3 ./scripts/package-deb.sh`
+- `OUT_DIR=./dist ./scripts/package-deb.sh`
+- `ARCH=amd64 ./scripts/package-deb.sh`
+- `SKIP_PIP_INSTALL=1 ./scripts/package-deb.sh` (offline packaging validation only)
+
+Install the generated package:
+
+```bash
+sudo dpkg -i dist/clyde-ux_*.deb
+```
+
+The package installs:
+
+- application files in `/opt/clyde-ux`
+- service unit in `/lib/systemd/system/clyde-ux.service`
+- runtime env defaults in `/etc/default/clyde-ux`
+
+Manage the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now clyde-ux.service
+sudo systemctl status clyde-ux.service
+sudo systemctl restart clyde-ux.service
+sudo systemctl stop clyde-ux.service
+```
+
+After install, adjust runtime variables in `/etc/default/clyde-ux` (notably `OLLAMA_API_BASE` and `OLLAMA_MODEL`) and restart the service.
