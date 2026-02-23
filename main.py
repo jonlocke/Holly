@@ -94,7 +94,16 @@ def load_ollama_config() -> tuple[str, str, str]:
 
 
 OLLAMA_API_BASE, OLLAMA_MODEL, OLLAMA_EMBED_MODEL = load_ollama_config()
-client = Client(host=OLLAMA_API_BASE)
+OLLAMA_BEARER_TOKEN = os.environ.get("OLLAMA_BEARER_TOKEN", "").strip()
+
+_client_options = {"host": OLLAMA_API_BASE}
+if OLLAMA_BEARER_TOKEN:
+    _client_options["headers"] = {
+        "Authorization": f"Bearer {OLLAMA_BEARER_TOKEN}",
+    }
+    logger.info("Using bearer token authentication for Ollama API requests.")
+
+client = Client(**_client_options)
 
 #MODEL = "gpt-oss:120b-cloud"
 MODEL = "qwen3:4b-16k"
