@@ -90,7 +90,7 @@ textarea:focus-visible {
 .avatar-column {
     width: 140px;
     border-right: none;
-    background: var(--surface);
+    background: transparent;
     display: flex;
     flex-direction: column;
     align-items: center;
