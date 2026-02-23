@@ -453,11 +453,16 @@ body.cyberpunk .input-bar {
 }
 
 body.cyberpunk .app,
-body.cyberpunk .chat-container,
 body.cyberpunk .input-stack,
 body.cyberpunk .assistant .bubble,
 body.cyberpunk .user .bubble {
     animation: cyberGlitch 1s infinite;
+}
+
+/* Keep the main output pane stable to avoid a glowing seam beside the avatar column */
+body.cyberpunk .chat-container {
+    animation: none;
+    box-shadow: none;
 }
 
 body.cyberpunk .assistant .bubble {
