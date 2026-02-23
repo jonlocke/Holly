@@ -106,9 +106,9 @@ textarea:focus-visible {
     background-image: url("/static/holly.png");
     background-repeat: no-repeat;
     background-size: 300% 100%;
-    border-radius: 12px;
-    border: 1px solid #d1d5db;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
 }
 
 .avatar-waiting {
