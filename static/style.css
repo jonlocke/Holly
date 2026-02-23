@@ -454,12 +454,16 @@ body.cyberpunk .avatar-column {
     background: rgba(26, 12, 51, 0.30);
 }
 
-body.cyberpunk .avatar-brand {
+body.cyberpunk .app,
+body.cyberpunk .chat-container,
+body.cyberpunk .input-stack,
+body.cyberpunk .assistant .bubble,
+body.cyberpunk .user .bubble {
     animation: cyberGlitch 1s infinite;
 }
 
 body.cyberpunk .assistant .bubble {
-    animation: cyberFlicker 0.22s infinite alternate;
+    animation: cyberFlicker 0.22s infinite alternate, cyberGlitch 1s infinite;
 }
 
 body.cyberpunk .user .bubble {
@@ -502,9 +506,21 @@ body.cyberpunk .typing span {
 }
 
 @keyframes cyberGlitch {
-    0% { text-shadow: 2px 0 rgba(255, 46, 209, 0.9); }
-    50% { text-shadow: -2px 0 rgba(0, 234, 255, 0.9); }
-    100% { text-shadow: 2px 0 rgba(255, 46, 209, 0.9); }
+    0% {
+        border-color: rgba(0, 234, 255, 0.95);
+        box-shadow: 0 0 10px rgba(0, 234, 255, 0.30), inset 0 0 0 rgba(255, 46, 209, 0);
+        transform: translateX(0);
+    }
+    50% {
+        border-color: rgba(255, 46, 209, 0.95);
+        box-shadow: 0 0 14px rgba(255, 46, 209, 0.35), inset 0 0 8px rgba(0, 234, 255, 0.15);
+        transform: translateX(0.6px);
+    }
+    100% {
+        border-color: rgba(0, 234, 255, 0.95);
+        box-shadow: 0 0 10px rgba(0, 234, 255, 0.30), inset 0 0 0 rgba(255, 46, 209, 0);
+        transform: translateX(0);
+    }
 }
 
 /* ---------- Responsive ---------- */
