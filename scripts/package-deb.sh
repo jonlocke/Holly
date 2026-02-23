@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="clyde-ux"
+APP_NAME="holly-ux"
 APP_DIR="/opt/${APP_NAME}"
 SERVICE_NAME="${APP_NAME}.service"
 MAINTAINER="Clyde Maintainers"
@@ -103,7 +103,7 @@ cat > "${DEBIAN_DIR}/postinst" <<'POSTINST'
 #!/usr/bin/env bash
 set -e
 
-APP_NAME="clyde-ux"
+APP_NAME="holly-ux"
 SERVICE_NAME="${APP_NAME}.service"
 APP_DIR="/opt/${APP_NAME}"
 
@@ -134,7 +134,7 @@ cat > "${DEBIAN_DIR}/prerm" <<'PRERM'
 #!/usr/bin/env bash
 set -e
 
-APP_NAME="clyde-ux"
+APP_NAME="holly-ux"
 SERVICE_NAME="${APP_NAME}.service"
 
 if command -v systemctl >/dev/null 2>&1; then
@@ -149,7 +149,7 @@ cat > "${DEBIAN_DIR}/postrm" <<'POSTRM'
 #!/usr/bin/env bash
 set -e
 
-APP_NAME="clyde-ux"
+APP_NAME="holly-ux"
 
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true
