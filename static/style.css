@@ -102,25 +102,26 @@ textarea:focus-visible {
 
 .holly-avatar {
     width: 96px;
-    aspect-ratio: 1 / 2;
+    aspect-ratio: 1 / 1;
     background-image: url("/static/holly.png");
     background-repeat: no-repeat;
-    background-size: 300% 100%;
+    /* Crop each tall frame to the top square area so the label can sit right below it */
+    background-size: 300% 200%;
     background-color: transparent;
     border: none;
     box-shadow: none;
 }
 
 .avatar-waiting {
-    background-position: 0% 50%;
+    background-position: 0% 0%;
 }
 
 .avatar-thinking {
-    background-position: 50% 50%;
+    background-position: 50% 0%;
 }
 
 .avatar-smiling {
-    background-position: 100% 50%;
+    background-position: 100% 0%;
 }
 
 .avatar-brand {
