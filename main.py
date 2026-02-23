@@ -9,12 +9,18 @@ import subprocess
 import tempfile
 import threading
 from urllib.parse import urlparse
+from urllib import request as urllib_request
+from urllib import error as urllib_error
 
 from math import sqrt
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 DEFAULT_LOCAL_OLLAMA_API_BASE = "http://localhost:11434"
@@ -94,7 +100,89 @@ def load_ollama_config() -> tuple[str, str, str]:
 
 
 OLLAMA_API_BASE, OLLAMA_MODEL, OLLAMA_EMBED_MODEL = load_ollama_config()
-client = Client(host=OLLAMA_API_BASE)
+OLLAMA_BEARER_TOKEN = os.environ.get("OLLAMA_BEARER_TOKEN", "").strip()
+
+_client_options = {"host": OLLAMA_API_BASE}
+if OLLAMA_BEARER_TOKEN:
+    _client_options["headers"] = {
+        "Authorization": f"Bearer {OLLAMA_BEARER_TOKEN}",
+    }
+    logger.info("Using bearer token authentication for Ollama API requests.")
+
+client = Client(**_client_options)
+
+
+def _openai_chat_completions_url() -> str:
+    base = OLLAMA_API_BASE.rstrip("/")
+    if base.endswith("/v1"):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
+
+
+def _stream_chat_tokens(prompt: str):
+    if OLLAMA_BEARER_TOKEN:
+        endpoint = _openai_chat_completions_url()
+        logger.info("Chat request -> POST %s (bearer auth)", endpoint)
+
+        body = json.dumps(
+            {
+                "model": "openclaw",
+                "stream": True,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+        ).encode("utf-8")
+
+        req = urllib_request.Request(
+            endpoint,
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {OLLAMA_BEARER_TOKEN}",
+            },
+        )
+
+        try:
+            with urllib_request.urlopen(req, timeout=120) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", errors="ignore").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[len("data:") :].strip()
+                    if payload == "[DONE]":
+                        break
+                    if not payload:
+                        continue
+                    chunk = json.loads(payload)
+                    for choice in chunk.get("choices", []):
+                        content = (choice.get("delta") or {}).get("content")
+                        if content:
+                            yield content
+        except urllib_error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(
+                f"Gateway chat request to {endpoint} failed ({exc.code}): {details or exc.reason}"
+            ) from exc
+        except urllib_error.URLError as exc:
+            raise RuntimeError(f"Unable to reach gateway chat endpoint {endpoint}: {exc}") from exc
+        return
+
+    logger.info(
+        "Chat request -> Ollama client host=%s model=%s",
+        OLLAMA_API_BASE,
+        OLLAMA_MODEL,
+    )
+    stream = client.chat(
+        model=OLLAMA_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        stream=True,
+    )
+    for chunk in stream:
+        if "message" in chunk:
+            content = chunk["message"].get("content", "")
+            if content:
+                yield content
+
 
 #MODEL = "gpt-oss:120b-cloud"
 MODEL = "qwen3:4b-16k"
@@ -431,6 +519,11 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+
 @app.route("/upload", methods=["POST"])
 def upload_file():
     if "file" not in request.files:
@@ -683,17 +776,8 @@ def stream():
                     f"{context}\n\nUser question: {user_message}"
                 )
 
-            stream = client.chat(
-                model=OLLAMA_MODEL,
-                messages=[{"role": "user", "content": final_prompt}],
-                stream=True,
-            )
-
-            for chunk in stream:
-                if "message" in chunk:
-                    content = chunk["message"].get("content", "")
-                    if content:
-                        yield sse({"type": "token", "content": content})
+            for content in _stream_chat_tokens(final_prompt):
+                yield sse({"type": "token", "content": content})
 
             yield sse({"type": "done"})
 
