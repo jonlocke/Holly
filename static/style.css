@@ -88,8 +88,8 @@ textarea:focus-visible {
 .app-watermark {
     position: absolute;
     left: 50%;
-    top: 48%;
-    transform: translate(-50%, -50%);
+    top: 16px;
+    transform: translateX(-50%);
     font-size: clamp(40px, 7vw, 88px);
     font-weight: 900;
     letter-spacing: 0.08em;
