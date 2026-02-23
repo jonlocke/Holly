@@ -117,6 +117,9 @@ def _openai_chat_completions_url() -> str:
 
 def _stream_chat_tokens(prompt: str):
     if OLLAMA_BEARER_TOKEN:
+        endpoint = _openai_chat_completions_url()
+        logger.info("Chat request -> POST %s (bearer auth)", endpoint)
+
         body = json.dumps(
             {
                 "model": "openclaw",
@@ -126,7 +129,7 @@ def _stream_chat_tokens(prompt: str):
         ).encode("utf-8")
 
         req = urllib_request.Request(
-            _openai_chat_completions_url(),
+            endpoint,
             data=body,
             method="POST",
             headers={
@@ -154,12 +157,17 @@ def _stream_chat_tokens(prompt: str):
         except urllib_error.HTTPError as exc:
             details = exc.read().decode("utf-8", errors="ignore")
             raise RuntimeError(
-                f"Gateway chat request failed ({exc.code}): {details or exc.reason}"
+                f"Gateway chat request to {endpoint} failed ({exc.code}): {details or exc.reason}"
             ) from exc
         except urllib_error.URLError as exc:
-            raise RuntimeError(f"Unable to reach gateway chat endpoint: {exc}") from exc
+            raise RuntimeError(f"Unable to reach gateway chat endpoint {endpoint}: {exc}") from exc
         return
 
+    logger.info(
+        "Chat request -> Ollama client host=%s model=%s",
+        OLLAMA_API_BASE,
+        OLLAMA_MODEL,
+    )
     stream = client.chat(
         model=OLLAMA_MODEL,
         messages=[{"role": "user", "content": prompt}],
