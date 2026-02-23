@@ -707,9 +707,17 @@ def stream():
             models = _list_available_models()
         except Exception as exc:
             # Return a normal token/done response so the UI doesn't show a streaming failure.
+            current_model = OPENCLAW_AGENT_MODEL if OLLAMA_BEARER_TOKEN else OLLAMA_MODEL
+            fallback_candidates = [current_model]
+            if OLLAMA_MODEL and OLLAMA_MODEL not in fallback_candidates:
+                fallback_candidates.append(OLLAMA_MODEL)
+
+            fallback_lines = "\n".join(f"- {model}" for model in fallback_candidates if model)
             fallback = (
-                f"Current model: {OPENCLAW_AGENT_MODEL if OLLAMA_BEARER_TOKEN else OLLAMA_MODEL}\n"
-                f"Unable to query model list from backend: {exc}"
+                f"Current model: {current_model}\n"
+                "Available models (fallback):\n"
+                f"{fallback_lines}\n"
+                f"(Could not fetch backend model catalog: {exc})"
             )
             return Response(
                 sse({"type": "token", "content": fallback}) + sse({"type": "done"}),
