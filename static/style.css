@@ -90,10 +90,12 @@ textarea:focus-visible {
     left: 50%;
     top: 16px;
     transform: translateX(-50%);
-    font-size: clamp(40px, 7vw, 88px);
+    font-size: clamp(20px, 3.5vw, 44px);
     font-weight: 900;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+    text-align: center;
+    white-space: nowrap;
     color: rgba(37, 99, 235, 0.18);
     text-shadow: 0 0 12px rgba(37, 99, 235, 0.18);
     pointer-events: none;
