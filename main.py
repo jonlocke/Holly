@@ -119,34 +119,66 @@ def _openai_chat_completions_url() -> str:
     return f"{base}/v1/chat/completions"
 
 
-OPENCLAW_AGENT_MODEL = os.environ.get("OPENCLAW_AGENT_MODEL", "holly").strip() or "holly"
+OPENCLAW_AGENT_MODEL = os.environ.get("OPENCLAW_AGENT_MODEL", "agent:holly:main").strip() or "agent:holly:main"
 
 
 def _list_available_models() -> list[str]:
     if OLLAMA_BEARER_TOKEN:
         base = OLLAMA_API_BASE.rstrip("/")
-        endpoint = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+        candidate_endpoints = [
+            f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models",
+            f"{base}/models",
+        ]
 
-        req = urllib_request.Request(
-            endpoint,
-            method="GET",
-            headers={"Authorization": f"Bearer {OLLAMA_BEARER_TOKEN}"},
-        )
+        last_error: Exception | None = None
+        for endpoint in candidate_endpoints:
+            req = urllib_request.Request(
+                endpoint,
+                method="GET",
+                headers={"Authorization": f"Bearer {OLLAMA_BEARER_TOKEN}"},
+            )
 
-        with urllib_request.urlopen(req, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="ignore") or "{}")
+            try:
+                with urllib_request.urlopen(req, timeout=30) as response:
+                    payload = json.loads(response.read().decode("utf-8", errors="ignore") or "{}")
+            except Exception as exc:
+                last_error = exc
+                continue
 
-        models = []
-        for item in payload.get("data", []):
-            model_id = item.get("id")
-            if isinstance(model_id, str) and model_id.strip():
-                models.append(model_id.strip())
+            models = []
+            for item in payload.get("data", []):
+                model_id = item.get("id")
+                if isinstance(model_id, str) and model_id.strip():
+                    models.append(model_id.strip())
 
-        return sorted(set(models))
+            return sorted(set(models))
 
-    listing = client.list()
+        if last_error:
+            raise RuntimeError(f"model listing failed: {last_error}") from last_error
+        return []
+
+    try:
+        listing = client.list()
+    except Exception:
+        listing = {"models": []}
+
     models = []
     for item in listing.get("models", []):
+        if isinstance(item, dict):
+            name = item.get("model") or item.get("name")
+            if isinstance(name, str) and name.strip():
+                models.append(name.strip())
+
+    if models:
+        return sorted(set(models))
+
+    # Fallback for older Ollama client/server combinations.
+    tags_url = f"{OLLAMA_API_BASE.rstrip('/')}/api/tags"
+    req = urllib_request.Request(tags_url, method="GET")
+    with urllib_request.urlopen(req, timeout=30) as response:
+        payload = json.loads(response.read().decode("utf-8", errors="ignore") or "{}")
+
+    for item in payload.get("models", []):
         if isinstance(item, dict):
             name = item.get("model") or item.get("name")
             if isinstance(name, str) and name.strip():

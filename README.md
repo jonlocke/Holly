@@ -39,7 +39,7 @@ Both `main.py` and `main-cyberpunk.py` now read startup settings from environmen
 - `PORT` (default: `5000`)
 - `OLLAMA_EMBED_MODEL` (default: `nomic-embed-text` for RAG embedding in `main.py`)
 - `OLLAMA_BEARER_TOKEN` (optional bearer token for Ollama/OpenAI-compatible endpoints that require `Authorization: Bearer ...`)
-- `OPENCLAW_AGENT_MODEL` (default: `holly`; used as the chat `model` when bearer-token/OpenAI-compatible mode is enabled)
+- `OPENCLAW_AGENT_MODEL` (default: `agent:holly:main`; used as the chat `model` when bearer-token/OpenAI-compatible mode is enabled)
 
 ### RAG embedding model
 
