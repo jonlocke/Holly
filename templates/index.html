@@ -35,15 +35,9 @@
         </div>
 
         <div class="secondary-controls">
-            <label class="enter-submit-toggle control-btn" for="enter-submit-toggle">
-                <input id="enter-submit-toggle" type="checkbox" checked />
-                <span id="enter-submit-text">Enter submits: On</span>
-            </label>
-
             <button type="button" id="theme-toggle" class="theme-btn control-btn" aria-label="Current theme: Holly">🤖 Holly</button>
-            <label for="file-input" id="file-picker-label" class="control-btn file-picker-btn">Choose file</label>
             <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
-            <button type="button" id="upload-btn" class="control-btn">Upload</button>
+            <button type="button" id="upload-btn" class="control-btn">Upload file</button>
         </div>
     </form>
 </div>
@@ -57,9 +51,6 @@ const stopBtn = document.getElementById("stop-btn");
 const themeToggle = document.getElementById("theme-toggle");
 const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
-const filePickerLabel = document.getElementById("file-picker-label");
-const enterSubmitToggle = document.getElementById("enter-submit-toggle");
-const enterSubmitText = document.getElementById("enter-submit-text");
 const asciiRainCanvas = document.getElementById("ascii-rain");
 const hollyAvatar = document.getElementById("holly-avatar");
 
@@ -289,33 +280,10 @@ input.addEventListener("keydown", (event) => {
         return;
     }
 
-    const shouldSubmitOnEnter = enterSubmitToggle.checked;
-
-    if (shouldSubmitOnEnter && !event.shiftKey) {
-        event.preventDefault();
-        form.requestSubmit();
-        return;
-    }
-
-    if (!shouldSubmitOnEnter && (event.metaKey || event.ctrlKey)) {
+    if (!event.shiftKey) {
         event.preventDefault();
         form.requestSubmit();
     }
-});
-
-function updateEnterSubmitLabel() {
-    enterSubmitText.textContent = `Enter submits: ${enterSubmitToggle.checked ? "On" : "Off"}`;
-}
-
-const savedEnterSubmitPreference = localStorage.getItem("enterSubmitEnabled");
-if (savedEnterSubmitPreference !== null) {
-    enterSubmitToggle.checked = savedEnterSubmitPreference === "true";
-}
-updateEnterSubmitLabel();
-
-enterSubmitToggle.addEventListener("change", () => {
-    localStorage.setItem("enterSubmitEnabled", String(enterSubmitToggle.checked));
-    updateEnterSubmitLabel();
 });
 
 /* ---------------- Theme Toggle ---------------- */
@@ -367,17 +335,9 @@ stopBtn.addEventListener("click", () => {
     input.disabled = false;
 });
 
-fileInput.addEventListener("change", () => {
+async function uploadSelectedFile() {
     const file = fileInput.files?.[0];
-    filePickerLabel.textContent = file ? file.name : "Choose file";
-});
-
-uploadBtn.addEventListener("click", async () => {
-    const file = fileInput.files?.[0];
-    if (!file) {
-        appendMessage("Please select a file before uploading.", "assistant");
-        return;
-    }
+    if (!file) return;
 
     const formData = new FormData();
     formData.append("file", file);
@@ -403,13 +363,20 @@ uploadBtn.addEventListener("click", async () => {
 
         appendMessage(payload?.message || "Upload complete.", "assistant");
         fileInput.value = "";
-        filePickerLabel.textContent = "Choose file";
     } catch (error) {
         appendMessage(`Upload error: ${error.message}`, "assistant");
     } finally {
         uploadBtn.disabled = false;
-        uploadBtn.textContent = "Upload";
+        uploadBtn.textContent = "Upload file";
     }
+}
+
+uploadBtn.addEventListener("click", () => {
+    fileInput.click();
+});
+
+fileInput.addEventListener("change", () => {
+    uploadSelectedFile();
 });
 
 /* ---------------- Message Trim ---------------- */

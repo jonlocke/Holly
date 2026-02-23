@@ -292,15 +292,6 @@ textarea::placeholder {
     color: var(--text-muted);
 }
 
-.enter-submit-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-.enter-submit-toggle input,
 #file-input {
     position: absolute;
     opacity: 0;
