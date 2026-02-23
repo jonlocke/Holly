@@ -2,7 +2,8 @@
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Your AI</title>
+    <title>Holly 6000</title>
+    <link rel="icon" type="image/png" href="/static/favicon-holly.png" />
     <link rel="stylesheet" href="/static/style.css" />
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
@@ -11,7 +12,15 @@
 <canvas id="ascii-rain" class="ascii-rain" aria-hidden="true"></canvas>
 
 <div class="app">
-    <div class="chat-container" id="output"></div>
+    <div class="app-watermark" aria-hidden="true">Holly 6000</div>
+    <div class="chat-shell">
+        <aside class="avatar-column" aria-label="Holly avatar">
+            <button id="avatar-theme-toggle" class="avatar-theme-toggle" type="button" aria-label="Toggle theme">
+                <div id="holly-avatar" class="holly-avatar avatar-smiling" aria-hidden="true"></div>
+            </button>
+        </aside>
+        <div class="chat-container" id="output"></div>
+    </div>
 
     <form id="chat-form" class="input-bar">
         <div class="primary-controls">
@@ -20,24 +29,16 @@
                 <textarea
                     id="user-input"
                     rows="1"
-                    placeholder="Ask anything... (use /clear to wipe uploaded context)"
+                    placeholder="Ask anything... use /help for a list of cmds"
                 ></textarea>
             </div>
 
             <button type="submit">Send</button>
             <button type="button" id="stop-btn" disabled>Stop</button>
+            <button type="button" id="upload-btn" class="control-btn">Upload file</button>
         </div>
 
-        <div class="secondary-controls">
-            <label class="enter-submit-toggle" for="enter-submit-toggle">
-                <input id="enter-submit-toggle" type="checkbox" checked />
-                Enter submits
-            </label>
-
-            <button type="button" id="theme-toggle" class="theme-btn" aria-label="Switch to cyberpunk theme">🛸 Cyberpunk</button>
-            <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
-            <button type="button" id="upload-btn">Upload</button>
-        </div>
+        <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
     </form>
 </div>
 
@@ -47,11 +48,11 @@ const input = document.getElementById("user-input");
 const output = document.getElementById("output");
 const prediction = document.getElementById("input-prediction");
 const stopBtn = document.getElementById("stop-btn");
-const themeToggle = document.getElementById("theme-toggle");
+const avatarThemeToggle = document.getElementById("avatar-theme-toggle");
 const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
-const enterSubmitToggle = document.getElementById("enter-submit-toggle");
 const asciiRainCanvas = document.getElementById("ascii-rain");
+const hollyAvatar = document.getElementById("holly-avatar");
 
 const rainCtx = asciiRainCanvas.getContext("2d");
 const rainChars = "アカサタナハマヤラワ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ#$%&*+-<>";
@@ -142,6 +143,12 @@ let autoScroll = true;
 let questionHistory = [];
 let historyCursor = -1;
 const MAX_MESSAGES = 100;
+let isStreaming = false;
+
+function setAvatarState(state) {
+    hollyAvatar.classList.remove("avatar-waiting", "avatar-thinking", "avatar-smiling");
+    hollyAvatar.classList.add(`avatar-${state}`);
+}
 
 /* ---------------- Scroll Lock ---------------- */
 
@@ -237,6 +244,10 @@ input.addEventListener("input", () => {
     historyCursor = -1;
     updateInputHeight();
     updatePrediction();
+    if (!isStreaming && input.value.length) {
+        setAvatarState("waiting");
+        output.scrollTop = output.scrollHeight;
+    }
 });
 
 input.addEventListener("scroll", () => {
@@ -269,27 +280,10 @@ input.addEventListener("keydown", (event) => {
         return;
     }
 
-    const shouldSubmitOnEnter = enterSubmitToggle.checked;
-
-    if (shouldSubmitOnEnter && !event.shiftKey) {
-        event.preventDefault();
-        form.requestSubmit();
-        return;
-    }
-
-    if (!shouldSubmitOnEnter && (event.metaKey || event.ctrlKey)) {
+    if (!event.shiftKey) {
         event.preventDefault();
         form.requestSubmit();
     }
-});
-
-const savedEnterSubmitPreference = localStorage.getItem("enterSubmitEnabled");
-if (savedEnterSubmitPreference !== null) {
-    enterSubmitToggle.checked = savedEnterSubmitPreference === "true";
-}
-
-enterSubmitToggle.addEventListener("change", () => {
-    localStorage.setItem("enterSubmitEnabled", String(enterSubmitToggle.checked));
 });
 
 /* ---------------- Theme Toggle ---------------- */
@@ -308,20 +302,13 @@ function setTheme(themeName) {
         stopRain();
     }
 
-    const isCyberpunk = themeName === "cyberpunk";
-    themeToggle.textContent = isCyberpunk ? "☀️ Default" : "🛸 Cyberpunk";
-    themeToggle.setAttribute(
-        "aria-label",
-        isCyberpunk ? "Switch to default theme" : "Switch to cyberpunk theme"
-    );
-
     localStorage.setItem("theme", themeName);
 }
 
 const savedTheme = localStorage.getItem("theme");
 setTheme(savedTheme === "cyberpunk" ? "cyberpunk" : "default");
 
-themeToggle.addEventListener("click", () => {
+avatarThemeToggle.addEventListener("click", () => {
     const nextTheme = document.body.classList.contains("cyberpunk")
         ? "default"
         : "cyberpunk";
@@ -335,16 +322,15 @@ stopBtn.addEventListener("click", () => {
         currentStream.abort();
         currentStream = null;
     }
+    isStreaming = false;
+    setAvatarState(input.value.length ? "waiting" : "smiling");
     stopBtn.disabled = true;
     input.disabled = false;
 });
 
-uploadBtn.addEventListener("click", async () => {
+async function uploadSelectedFile() {
     const file = fileInput.files?.[0];
-    if (!file) {
-        appendMessage("Please select a file before uploading.", "assistant");
-        return;
-    }
+    if (!file) return;
 
     const formData = new FormData();
     formData.append("file", file);
@@ -374,8 +360,16 @@ uploadBtn.addEventListener("click", async () => {
         appendMessage(`Upload error: ${error.message}`, "assistant");
     } finally {
         uploadBtn.disabled = false;
-        uploadBtn.textContent = "Upload";
+        uploadBtn.textContent = "Upload file";
     }
+}
+
+uploadBtn.addEventListener("click", () => {
+    fileInput.click();
+});
+
+fileInput.addEventListener("change", () => {
+    uploadSelectedFile();
 });
 
 /* ---------------- Message Trim ---------------- */
@@ -448,6 +442,8 @@ function streamResponse(message) {
 
     input.disabled = true;
     stopBtn.disabled = false;
+    isStreaming = true;
+    setAvatarState("thinking");
 
     const abortController = new AbortController();
     currentStream = abortController;
@@ -461,6 +457,7 @@ function streamResponse(message) {
         input.focus();
         stopBtn.disabled = true;
         currentStream = null;
+        isStreaming = false;
     };
 
     const handleEvent = (data) => {
@@ -487,6 +484,7 @@ function streamResponse(message) {
         if (data.type === "done") {
             if (!started) {
                 bubble.textContent = "";
+                setAvatarState("smiling");
                 resetUi();
                 return;
             }
@@ -501,12 +499,14 @@ function streamResponse(message) {
             input.disabled = false;
             input.focus();
             stopBtn.disabled = true;
+            setAvatarState("smiling");
 
             resetUi();
         }
 
         if (data.type === "error") {
             bubble.textContent = "Error: " + data.error;
+            setAvatarState(input.value.length ? "waiting" : "smiling");
             resetUi();
         }
     };
@@ -564,12 +564,14 @@ function streamResponse(message) {
             }
 
             if (currentStream === abortController) {
+                setAvatarState(input.value.length ? "waiting" : "smiling");
                 resetUi();
             }
         })
         .catch((error) => {
             if (error.name === "AbortError") {
                 bubble.textContent = "Request stopped.";
+                setAvatarState(input.value.length ? "waiting" : "smiling");
                 resetUi();
                 return;
             }
@@ -584,6 +586,7 @@ function streamResponse(message) {
 updateInputHeight();
 updatePrediction();
 loadQuestionHistory().then(updatePrediction);
+setAvatarState("smiling");
 </script>
 
 </body>

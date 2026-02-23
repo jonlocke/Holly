@@ -62,6 +62,7 @@ body {
 }
 
 .theme-btn:focus-visible,
+.control-btn:focus-visible,
 .input-bar button:focus-visible,
 textarea:focus-visible {
     outline: 2px solid var(--focus-ring);
@@ -79,7 +80,81 @@ textarea:focus-visible {
     flex-direction: column;
     overflow: hidden;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+    position: relative;
 }
+
+
+
+.app-watermark {
+    position: absolute;
+    left: 50%;
+    top: 16px;
+    transform: translateX(-50%);
+    font-size: clamp(20px, 3.5vw, 44px);
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    text-align: center;
+    white-space: nowrap;
+    color: rgba(37, 99, 235, 0.18);
+    text-shadow: 0 0 12px rgba(37, 99, 235, 0.18);
+    pointer-events: none;
+    user-select: none;
+    z-index: 0;
+}
+
+.chat-shell {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    position: relative;
+    z-index: 1;
+}
+
+.avatar-column {
+    width: 140px;
+    border-right: none;
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 20px 12px;
+    box-sizing: border-box;
+}
+
+.avatar-theme-toggle {
+    all: unset;
+    cursor: pointer;
+    display: inline-flex;
+}
+
+.holly-avatar {
+    width: 144px;
+    aspect-ratio: 1 / 1;
+    background-image: url("/static/holly.png");
+    background-repeat: no-repeat;
+    /* Each frame is tall; crop to square and shift down so the face isn't cut off. */
+    background-size: 300% 200%;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    transform: translateX(10%);
+}
+
+.avatar-waiting {
+    background-position: 0% 42%;
+}
+
+.avatar-thinking {
+    background-position: 50% 42%;
+}
+
+.avatar-smiling {
+    background-position: 100% 42%;
+}
+
 
 /* ---------- Chat Area ---------- */
 
@@ -88,6 +163,26 @@ textarea:focus-visible {
     overflow-y: auto;
     padding: 24px;
     scroll-behavior: smooth;
+}
+
+@media (max-width: 760px) {
+    .chat-shell {
+        flex-direction: column;
+    }
+
+    .avatar-column {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        flex-direction: row;
+        justify-content: flex-start;
+        padding: 10px 12px;
+    }
+
+    .holly-avatar {
+        width: 108px;
+        height: 108px;
+    }
 }
 
 .chat-container::-webkit-scrollbar {
@@ -139,6 +234,8 @@ textarea:focus-visible {
 /* ---------- Input Bar ---------- */
 
 .input-bar {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -220,15 +317,19 @@ textarea::placeholder {
     color: var(--text-muted);
 }
 
-.enter-submit-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    color: var(--text-muted);
+#file-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
 }
 
+.control-btn,
 .input-bar button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     padding: 10px 14px;
     min-height: 40px;
     font-size: 14px;
@@ -236,8 +337,11 @@ textarea::placeholder {
     border: 1px solid var(--border);
     background: white;
     cursor: pointer;
+    color: var(--text);
+    box-sizing: border-box;
 }
 
+.control-btn:hover,
 .input-bar button:hover {
     background: #f3f4f6;
 }
@@ -316,6 +420,7 @@ body.dark .assistant .bubble {
 
 body.dark .input-stack,
 body.dark textarea,
+body.dark .control-btn,
 body.dark .input-bar button {
     background: #111827;
     color: #e5e7eb;
@@ -323,6 +428,7 @@ body.dark .input-bar button {
 }
 
 body.dark .theme-btn:hover,
+body.dark .control-btn:hover,
 body.dark .input-bar button:hover {
     background: #374151;
 }
@@ -338,14 +444,14 @@ body.dark .chat-container::-webkit-scrollbar-thumb {
 
 body.cyberpunk {
     --bg: #05010f;
-    --surface: #120624;
-    --surface-muted: #1a0c33;
+    --surface: rgba(18, 6, 36, 0.42);
+    --surface-muted: rgba(26, 12, 51, 0.35);
     --border: #00eaff;
     --text: #8cf7ff;
     --text-muted: #d67bff;
     --focus-ring: #ff2ed1;
     background-image:
-        radial-gradient(circle at 10% 20%, rgba(255, 46, 209, 0.15), transparent 30%),
+        radial-gradient(circle at 10% 20%, rgba(255, 46, 209, 0.30), transparent 30%),
         radial-gradient(circle at 80% 0%, rgba(0, 234, 255, 0.16), transparent 25%);
 }
 
@@ -353,14 +459,54 @@ body.cyberpunk .ascii-rain {
     display: block;
 }
 
+body.cyberpunk .app-watermark {
+    color: rgba(0, 234, 255, 0.22);
+    text-shadow: 0 0 16px rgba(0, 234, 255, 0.35), 0 0 28px rgba(255, 46, 209, 0.22);
+}
+
 body.cyberpunk .app {
     border-color: #00eaff;
     box-shadow: 0 0 18px rgba(0, 234, 255, 0.45), 0 0 28px rgba(255, 46, 209, 0.2);
+    backdrop-filter: blur(1px);
+}
+
+body.cyberpunk::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.42;
+    mix-blend-mode: overlay;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.32),
+        rgba(0, 0, 0, 0.32) 2px,
+        transparent 2px,
+        transparent 4px
+    );
 }
 
 body.cyberpunk .header,
 body.cyberpunk .input-bar {
     border-color: #00eaff;
+}
+
+body.cyberpunk .app,
+body.cyberpunk .input-stack,
+body.cyberpunk .assistant .bubble,
+body.cyberpunk .user .bubble {
+    animation: cyberGlitch 1s infinite;
+}
+
+/* Keep the main output pane stable to avoid a glowing seam beside the avatar column */
+body.cyberpunk .chat-container {
+    animation: none;
+    box-shadow: none;
+}
+
+body.cyberpunk .assistant .bubble {
+    animation: cyberFlicker 0.22s infinite alternate, cyberGlitch 1s infinite;
 }
 
 body.cyberpunk .user .bubble {
@@ -376,6 +522,7 @@ body.cyberpunk .assistant .bubble {
 
 body.cyberpunk .input-stack,
 body.cyberpunk textarea,
+body.cyberpunk .control-btn,
 body.cyberpunk .input-bar button,
 body.cyberpunk .theme-btn {
     background: rgba(4, 0, 18, 0.85);
@@ -388,6 +535,7 @@ body.cyberpunk .input-prediction .suffix {
 }
 
 body.cyberpunk .theme-btn:hover,
+body.cyberpunk .control-btn:hover,
 body.cyberpunk .input-bar button:hover {
     background: rgba(255, 46, 209, 0.2);
 }
@@ -395,6 +543,29 @@ body.cyberpunk .input-bar button:hover {
 body.cyberpunk .cursor,
 body.cyberpunk .typing span {
     background: #ff2ed1;
+}
+
+@keyframes cyberFlicker {
+    from { opacity: 1; }
+    to { opacity: 0.86; }
+}
+
+@keyframes cyberGlitch {
+    0% {
+        border-color: rgba(0, 234, 255, 0.95);
+        box-shadow: 0 0 10px rgba(0, 234, 255, 0.30), inset 0 0 0 rgba(255, 46, 209, 0);
+        transform: translateX(0);
+    }
+    50% {
+        border-color: rgba(255, 46, 209, 0.95);
+        box-shadow: 0 0 14px rgba(255, 46, 209, 0.35), inset 0 0 8px rgba(0, 234, 255, 0.15);
+        transform: translateX(0.6px);
+    }
+    100% {
+        border-color: rgba(0, 234, 255, 0.95);
+        box-shadow: 0 0 10px rgba(0, 234, 255, 0.30), inset 0 0 0 rgba(255, 46, 209, 0);
+        transform: translateX(0);
+    }
 }
 
 /* ---------- Responsive ---------- */
