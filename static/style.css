@@ -108,7 +108,7 @@ textarea:focus-visible {
 }
 
 .holly-avatar {
-    width: 96px;
+    width: 144px;
     aspect-ratio: 1 / 1;
     background-image: url("/static/holly.png");
     background-repeat: no-repeat;
@@ -163,8 +163,8 @@ textarea:focus-visible {
     }
 
     .holly-avatar {
-        width: 72px;
-        height: 72px;
+        width: 108px;
+        height: 108px;
     }
 }
 
