@@ -113,15 +113,15 @@ textarea:focus-visible {
 }
 
 .avatar-waiting {
-    background-position: 0% 22%;
+    background-position: 0% 42%;
 }
 
 .avatar-thinking {
-    background-position: 50% 22%;
+    background-position: 50% 42%;
 }
 
 .avatar-smiling {
-    background-position: 100% 22%;
+    background-position: 100% 42%;
 }
 
 .avatar-brand {
