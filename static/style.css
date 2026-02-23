@@ -435,11 +435,13 @@ body.cyberpunk::after {
     position: fixed;
     inset: 0;
     pointer-events: none;
-    z-index: 5;
+    z-index: 9999;
+    opacity: 0.42;
+    mix-blend-mode: overlay;
     background: repeating-linear-gradient(
         0deg,
-        rgba(0, 0, 0, 0.16),
-        rgba(0, 0, 0, 0.16) 2px,
+        rgba(0, 0, 0, 0.32),
+        rgba(0, 0, 0, 0.32) 2px,
         transparent 2px,
         transparent 4px
     );
