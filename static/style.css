@@ -409,8 +409,8 @@ body.dark .chat-container::-webkit-scrollbar-thumb {
 
 body.cyberpunk {
     --bg: #05010f;
-    --surface: #120624;
-    --surface-muted: #1a0c33;
+    --surface: rgba(18, 6, 36, 0.42);
+    --surface-muted: rgba(26, 12, 51, 0.35);
     --border: #00eaff;
     --text: #8cf7ff;
     --text-muted: #d67bff;
@@ -427,6 +427,22 @@ body.cyberpunk .ascii-rain {
 body.cyberpunk .app {
     border-color: #00eaff;
     box-shadow: 0 0 18px rgba(0, 234, 255, 0.45), 0 0 28px rgba(255, 46, 209, 0.2);
+    backdrop-filter: blur(1px);
+}
+
+body.cyberpunk::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 5;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.16),
+        rgba(0, 0, 0, 0.16) 2px,
+        transparent 2px,
+        transparent 4px
+    );
 }
 
 body.cyberpunk .header,
@@ -436,6 +452,14 @@ body.cyberpunk .input-bar {
 
 body.cyberpunk .avatar-column {
     background: rgba(26, 12, 51, 0.30);
+}
+
+body.cyberpunk .avatar-brand {
+    animation: cyberGlitch 1s infinite;
+}
+
+body.cyberpunk .assistant .bubble {
+    animation: cyberFlicker 0.22s infinite alternate;
 }
 
 body.cyberpunk .user .bubble {
@@ -470,6 +494,17 @@ body.cyberpunk .input-bar button:hover {
 body.cyberpunk .cursor,
 body.cyberpunk .typing span {
     background: #ff2ed1;
+}
+
+@keyframes cyberFlicker {
+    from { opacity: 1; }
+    to { opacity: 0.86; }
+}
+
+@keyframes cyberGlitch {
+    0% { text-shadow: 2px 0 rgba(255, 46, 209, 0.9); }
+    50% { text-shadow: -2px 0 rgba(0, 234, 255, 0.9); }
+    100% { text-shadow: 2px 0 rgba(255, 46, 209, 0.9); }
 }
 
 /* ---------- Responsive ---------- */
