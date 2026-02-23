@@ -80,12 +80,33 @@ textarea:focus-visible {
     flex-direction: column;
     overflow: hidden;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+    position: relative;
+}
+
+
+
+.app-watermark {
+    position: absolute;
+    left: 50%;
+    top: 48%;
+    transform: translate(-50%, -50%);
+    font-size: clamp(40px, 7vw, 88px);
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(37, 99, 235, 0.18);
+    text-shadow: 0 0 12px rgba(37, 99, 235, 0.18);
+    pointer-events: none;
+    user-select: none;
+    z-index: 0;
 }
 
 .chat-shell {
     flex: 1;
     display: flex;
     min-height: 0;
+    position: relative;
+    z-index: 1;
 }
 
 .avatar-column {
@@ -117,7 +138,7 @@ textarea:focus-visible {
     background-color: transparent;
     border: none;
     box-shadow: none;
-    transform: translateX(20%);
+    transform: translateX(10%);
 }
 
 .avatar-waiting {
@@ -132,13 +153,6 @@ textarea:focus-visible {
     background-position: 100% 42%;
 }
 
-.avatar-brand {
-    font-size: 12px;
-    font-weight: 600;
-    color: #374151;
-    text-align: center;
-    letter-spacing: 0.02em;
-}
 
 /* ---------- Chat Area ---------- */
 
@@ -218,6 +232,8 @@ textarea:focus-visible {
 /* ---------- Input Bar ---------- */
 
 .input-bar {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -439,6 +455,11 @@ body.cyberpunk {
 
 body.cyberpunk .ascii-rain {
     display: block;
+}
+
+body.cyberpunk .app-watermark {
+    color: rgba(0, 234, 255, 0.22);
+    text-shadow: 0 0 16px rgba(0, 234, 255, 0.35), 0 0 28px rgba(255, 46, 209, 0.22);
 }
 
 body.cyberpunk .app {
