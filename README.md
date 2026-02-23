@@ -39,6 +39,7 @@ Both `main.py` and `main-cyberpunk.py` now read startup settings from environmen
 - `PORT` (default: `5000`)
 - `OLLAMA_EMBED_MODEL` (default: `nomic-embed-text` for RAG embedding in `main.py`)
 - `OLLAMA_BEARER_TOKEN` (optional bearer token for Ollama/OpenAI-compatible endpoints that require `Authorization: Bearer ...`)
+- `OPENCLAW_AGENT_MODEL` (default: `holly`; used as the chat `model` when bearer-token/OpenAI-compatible mode is enabled)
 
 ### RAG embedding model
 
@@ -53,6 +54,8 @@ ollama pull nomic-embed-text
 
 ### Chat commands
 
+- `/help`: shows the available slash commands.
+- `/models`: lists currently available models from the configured backend.
 - `/clear`: clears the current session knowledge base.
 - `/git <repository-url>`: clones a Git repository (for example `git@github.com:jonlocke/AImaster-linux.git`) and indexes repository text content into session RAG context.
 - `/vectordb`: shows in-memory vector store size (total indexed chunks) and open sessions with indexed chunk counts.
