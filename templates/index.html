@@ -35,14 +35,15 @@
         </div>
 
         <div class="secondary-controls">
-            <label class="enter-submit-toggle" for="enter-submit-toggle">
+            <label class="enter-submit-toggle control-btn" for="enter-submit-toggle">
                 <input id="enter-submit-toggle" type="checkbox" checked />
-                Enter submits
+                <span id="enter-submit-text">Enter submits: On</span>
             </label>
 
-            <button type="button" id="theme-toggle" class="theme-btn" aria-label="Switch to cyberpunk theme">🛸 Cyberpunk</button>
+            <button type="button" id="theme-toggle" class="theme-btn control-btn" aria-label="Current theme: Holly">🤖 Holly</button>
+            <label for="file-input" id="file-picker-label" class="control-btn file-picker-btn">Choose file</label>
             <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
-            <button type="button" id="upload-btn">Upload</button>
+            <button type="button" id="upload-btn" class="control-btn">Upload</button>
         </div>
     </form>
 </div>
@@ -56,7 +57,9 @@ const stopBtn = document.getElementById("stop-btn");
 const themeToggle = document.getElementById("theme-toggle");
 const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
+const filePickerLabel = document.getElementById("file-picker-label");
 const enterSubmitToggle = document.getElementById("enter-submit-toggle");
+const enterSubmitText = document.getElementById("enter-submit-text");
 const asciiRainCanvas = document.getElementById("ascii-rain");
 const hollyAvatar = document.getElementById("holly-avatar");
 
@@ -300,13 +303,19 @@ input.addEventListener("keydown", (event) => {
     }
 });
 
+function updateEnterSubmitLabel() {
+    enterSubmitText.textContent = `Enter submits: ${enterSubmitToggle.checked ? "On" : "Off"}`;
+}
+
 const savedEnterSubmitPreference = localStorage.getItem("enterSubmitEnabled");
 if (savedEnterSubmitPreference !== null) {
     enterSubmitToggle.checked = savedEnterSubmitPreference === "true";
 }
+updateEnterSubmitLabel();
 
 enterSubmitToggle.addEventListener("change", () => {
     localStorage.setItem("enterSubmitEnabled", String(enterSubmitToggle.checked));
+    updateEnterSubmitLabel();
 });
 
 /* ---------------- Theme Toggle ---------------- */
@@ -326,10 +335,10 @@ function setTheme(themeName) {
     }
 
     const isCyberpunk = themeName === "cyberpunk";
-    themeToggle.textContent = isCyberpunk ? "☀️ Default" : "🛸 Cyberpunk";
+    themeToggle.textContent = isCyberpunk ? "🛸 Cyber" : "🤖 Holly";
     themeToggle.setAttribute(
         "aria-label",
-        isCyberpunk ? "Switch to default theme" : "Switch to cyberpunk theme"
+        isCyberpunk ? "Current theme: Cyber" : "Current theme: Holly"
     );
 
     localStorage.setItem("theme", themeName);
@@ -356,6 +365,11 @@ stopBtn.addEventListener("click", () => {
     setAvatarState(input.value.length ? "waiting" : "smiling");
     stopBtn.disabled = true;
     input.disabled = false;
+});
+
+fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    filePickerLabel.textContent = file ? file.name : "Choose file";
 });
 
 uploadBtn.addEventListener("click", async () => {
@@ -389,6 +403,7 @@ uploadBtn.addEventListener("click", async () => {
 
         appendMessage(payload?.message || "Upload complete.", "assistant");
         fileInput.value = "";
+        filePickerLabel.textContent = "Choose file";
     } catch (error) {
         appendMessage(`Upload error: ${error.message}`, "assistant");
     } finally {
