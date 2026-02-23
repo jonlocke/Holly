@@ -38,6 +38,7 @@ Both `main.py` and `main-cyberpunk.py` now read startup settings from environmen
 - `HOST` (default: `127.0.0.1`)
 - `PORT` (default: `5000`)
 - `OLLAMA_EMBED_MODEL` (default: `nomic-embed-text` for RAG embedding in `main.py`)
+- `OLLAMA_BEARER_TOKEN` (optional bearer token for Ollama/OpenAI-compatible endpoints that require `Authorization: Bearer ...`)
 
 ### RAG embedding model
 
@@ -64,4 +65,12 @@ Example:
 
 ```bash
 FLASK_DEBUG=1 HOST=127.0.0.1 PORT=5000 python main.py
+```
+
+With bearer token auth:
+
+```bash
+OLLAMA_API_BASE=http://127.0.0.1:18789 \
+OLLAMA_BEARER_TOKEN=your_gateway_token \
+python main.py
 ```
