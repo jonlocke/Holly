@@ -67,10 +67,14 @@ Example:
 FLASK_DEBUG=1 HOST=127.0.0.1 PORT=5000 python main.py
 ```
 
-With bearer token auth:
+With bearer token auth (OpenClaw gateway / OpenAI-compatible endpoint):
 
 ```bash
 OLLAMA_API_BASE=http://127.0.0.1:18789 \
 OLLAMA_BEARER_TOKEN=your_gateway_token \
 python main.py
 ```
+
+Notes:
+- The app will call `POST /v1/chat/completions` when `OLLAMA_BEARER_TOKEN` is set.
+- `OLLAMA_API_BASE` can be either the gateway root (`http://127.0.0.1:18789`) or `/v1` base (`http://127.0.0.1:18789/v1`).
