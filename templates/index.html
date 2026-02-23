@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8" />
-    <title>Your AI</title>
+    <title>Holly 6000</title>
     <link rel="stylesheet" href="/static/style.css" />
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
@@ -11,7 +11,13 @@
 <canvas id="ascii-rain" class="ascii-rain" aria-hidden="true"></canvas>
 
 <div class="app">
-    <div class="chat-container" id="output"></div>
+    <div class="chat-shell">
+        <aside class="avatar-column" aria-label="Holly avatar">
+            <div id="holly-avatar" class="holly-avatar avatar-smiling" aria-hidden="true"></div>
+            <div class="avatar-brand">Holly 6000</div>
+        </aside>
+        <div class="chat-container" id="output"></div>
+    </div>
 
     <form id="chat-form" class="input-bar">
         <div class="primary-controls">
@@ -52,6 +58,7 @@ const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
 const enterSubmitToggle = document.getElementById("enter-submit-toggle");
 const asciiRainCanvas = document.getElementById("ascii-rain");
+const hollyAvatar = document.getElementById("holly-avatar");
 
 const rainCtx = asciiRainCanvas.getContext("2d");
 const rainChars = "アカサタナハマヤラワ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ#$%&*+-<>";
@@ -142,6 +149,12 @@ let autoScroll = true;
 let questionHistory = [];
 let historyCursor = -1;
 const MAX_MESSAGES = 100;
+let isStreaming = false;
+
+function setAvatarState(state) {
+    hollyAvatar.classList.remove("avatar-waiting", "avatar-thinking", "avatar-smiling");
+    hollyAvatar.classList.add(`avatar-${state}`);
+}
 
 /* ---------------- Scroll Lock ---------------- */
 
@@ -237,6 +250,10 @@ input.addEventListener("input", () => {
     historyCursor = -1;
     updateInputHeight();
     updatePrediction();
+    if (!isStreaming && input.value.length) {
+        setAvatarState("waiting");
+        output.scrollTop = output.scrollHeight;
+    }
 });
 
 input.addEventListener("scroll", () => {
@@ -335,6 +352,8 @@ stopBtn.addEventListener("click", () => {
         currentStream.abort();
         currentStream = null;
     }
+    isStreaming = false;
+    setAvatarState(input.value.length ? "waiting" : "smiling");
     stopBtn.disabled = true;
     input.disabled = false;
 });
@@ -448,6 +467,8 @@ function streamResponse(message) {
 
     input.disabled = true;
     stopBtn.disabled = false;
+    isStreaming = true;
+    setAvatarState("thinking");
 
     const abortController = new AbortController();
     currentStream = abortController;
@@ -461,6 +482,7 @@ function streamResponse(message) {
         input.focus();
         stopBtn.disabled = true;
         currentStream = null;
+        isStreaming = false;
     };
 
     const handleEvent = (data) => {
@@ -487,6 +509,7 @@ function streamResponse(message) {
         if (data.type === "done") {
             if (!started) {
                 bubble.textContent = "";
+                setAvatarState("smiling");
                 resetUi();
                 return;
             }
@@ -501,12 +524,14 @@ function streamResponse(message) {
             input.disabled = false;
             input.focus();
             stopBtn.disabled = true;
+            setAvatarState("smiling");
 
             resetUi();
         }
 
         if (data.type === "error") {
             bubble.textContent = "Error: " + data.error;
+            setAvatarState(input.value.length ? "waiting" : "smiling");
             resetUi();
         }
     };
@@ -564,12 +589,14 @@ function streamResponse(message) {
             }
 
             if (currentStream === abortController) {
+                setAvatarState(input.value.length ? "waiting" : "smiling");
                 resetUi();
             }
         })
         .catch((error) => {
             if (error.name === "AbortError") {
                 bubble.textContent = "Request stopped.";
+                setAvatarState(input.value.length ? "waiting" : "smiling");
                 resetUi();
                 return;
             }
@@ -584,6 +611,7 @@ function streamResponse(message) {
 updateInputHeight();
 updatePrediction();
 loadQuestionHistory().then(updatePrediction);
+setAvatarState("smiling");
 </script>
 
 </body>
