@@ -119,7 +119,8 @@ def _openai_chat_completions_url() -> str:
     return f"{base}/v1/chat/completions"
 
 
-OPENCLAW_AGENT_MODEL = os.environ.get("OPENCLAW_AGENT_MODEL", "agent:holly:main").strip() or "agent:holly:main"
+OPENCLAW_AGENT_MODEL = os.environ.get("OPENCLAW_AGENT_MODEL", "agent:holly").strip() or "agent:holly"
+OPENCLAW_AGENT_ID = os.environ.get("OPENCLAW_AGENT_ID", "holly").strip() or "holly"
 
 
 def _list_available_models() -> list[str]:
@@ -207,6 +208,7 @@ def _stream_chat_tokens(prompt: str):
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {OLLAMA_BEARER_TOKEN}",
+                "X-OpenClaw-Agent-Id": OPENCLAW_AGENT_ID,
             },
         )
 
@@ -704,9 +706,13 @@ def stream():
         try:
             models = _list_available_models()
         except Exception as exc:
+            # Return a normal token/done response so the UI doesn't show a streaming failure.
+            fallback = (
+                f"Current model: {OPENCLAW_AGENT_MODEL if OLLAMA_BEARER_TOKEN else OLLAMA_MODEL}\n"
+                f"Unable to query model list from backend: {exc}"
+            )
             return Response(
-                sse({"type": "error", "error": f"Unable to list models: {exc}"}),
-                status=502,
+                sse({"type": "token", "content": fallback}) + sse({"type": "done"}),
                 mimetype="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
