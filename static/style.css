@@ -101,6 +101,12 @@ textarea:focus-visible {
     box-sizing: border-box;
 }
 
+.avatar-theme-toggle {
+    all: unset;
+    cursor: pointer;
+    display: inline-flex;
+}
+
 .holly-avatar {
     width: 96px;
     aspect-ratio: 1 / 1;

@@ -13,7 +13,9 @@
 <div class="app">
     <div class="chat-shell">
         <aside class="avatar-column" aria-label="Holly avatar">
-            <div id="holly-avatar" class="holly-avatar avatar-smiling" aria-hidden="true"></div>
+            <button id="avatar-theme-toggle" class="avatar-theme-toggle" type="button" aria-label="Toggle theme">
+                <div id="holly-avatar" class="holly-avatar avatar-smiling" aria-hidden="true"></div>
+            </button>
             <div class="avatar-brand">Holly 6000</div>
         </aside>
         <div class="chat-container" id="output"></div>
@@ -32,13 +34,10 @@
 
             <button type="submit">Send</button>
             <button type="button" id="stop-btn" disabled>Stop</button>
-        </div>
-
-        <div class="secondary-controls">
-            <button type="button" id="theme-toggle" class="theme-btn control-btn" aria-label="Current theme: Holly">🤖 Holly</button>
-            <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
             <button type="button" id="upload-btn" class="control-btn">Upload file</button>
         </div>
+
+        <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
     </form>
 </div>
 
@@ -48,7 +47,7 @@ const input = document.getElementById("user-input");
 const output = document.getElementById("output");
 const prediction = document.getElementById("input-prediction");
 const stopBtn = document.getElementById("stop-btn");
-const themeToggle = document.getElementById("theme-toggle");
+const avatarThemeToggle = document.getElementById("avatar-theme-toggle");
 const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
 const asciiRainCanvas = document.getElementById("ascii-rain");
@@ -302,20 +301,13 @@ function setTheme(themeName) {
         stopRain();
     }
 
-    const isCyberpunk = themeName === "cyberpunk";
-    themeToggle.textContent = isCyberpunk ? "🛸 Cyber" : "🤖 Holly";
-    themeToggle.setAttribute(
-        "aria-label",
-        isCyberpunk ? "Current theme: Cyber" : "Current theme: Holly"
-    );
-
     localStorage.setItem("theme", themeName);
 }
 
 const savedTheme = localStorage.getItem("theme");
 setTheme(savedTheme === "cyberpunk" ? "cyberpunk" : "default");
 
-themeToggle.addEventListener("click", () => {
+avatarThemeToggle.addEventListener("click", () => {
     const nextTheme = document.body.classList.contains("cyberpunk")
         ? "default"
         : "cyberpunk";
