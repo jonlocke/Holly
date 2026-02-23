@@ -1,0 +1,21 @@
+[Unit]
+Description=Clyde UX Web Application
+After=network.target
+
+[Service]
+Type=simple
+User=clyde
+Group=clyde
+WorkingDirectory=/opt/clyde-ux
+EnvironmentFile=-/etc/default/clyde-ux
+ExecStart=/opt/clyde-ux/.venv/bin/python /opt/clyde-ux/main.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
