@@ -434,6 +434,10 @@ body.cyberpunk .input-bar {
     border-color: #00eaff;
 }
 
+body.cyberpunk .avatar-column {
+    background: rgba(26, 12, 51, 0.30);
+}
+
 body.cyberpunk .user .bubble {
     background: linear-gradient(120deg, #ff2ed1, #af2bff);
     color: #fff;
