@@ -119,6 +119,42 @@ def _openai_chat_completions_url() -> str:
     return f"{base}/v1/chat/completions"
 
 
+OPENCLAW_AGENT_MODEL = os.environ.get("OPENCLAW_AGENT_MODEL", "holly").strip() or "holly"
+
+
+def _list_available_models() -> list[str]:
+    if OLLAMA_BEARER_TOKEN:
+        base = OLLAMA_API_BASE.rstrip("/")
+        endpoint = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+
+        req = urllib_request.Request(
+            endpoint,
+            method="GET",
+            headers={"Authorization": f"Bearer {OLLAMA_BEARER_TOKEN}"},
+        )
+
+        with urllib_request.urlopen(req, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="ignore") or "{}")
+
+        models = []
+        for item in payload.get("data", []):
+            model_id = item.get("id")
+            if isinstance(model_id, str) and model_id.strip():
+                models.append(model_id.strip())
+
+        return sorted(set(models))
+
+    listing = client.list()
+    models = []
+    for item in listing.get("models", []):
+        if isinstance(item, dict):
+            name = item.get("model") or item.get("name")
+            if isinstance(name, str) and name.strip():
+                models.append(name.strip())
+
+    return sorted(set(models))
+
+
 def _stream_chat_tokens(prompt: str):
     if OLLAMA_BEARER_TOKEN:
         endpoint = _openai_chat_completions_url()
@@ -126,7 +162,7 @@ def _stream_chat_tokens(prompt: str):
 
         body = json.dumps(
             {
-                "model": "openclaw",
+                "model": OPENCLAW_AGENT_MODEL,
                 "stream": True,
                 "messages": [{"role": "user", "content": prompt}],
             }
@@ -184,8 +220,6 @@ def _stream_chat_tokens(prompt: str):
                 yield content
 
 
-#MODEL = "gpt-oss:120b-cloud"
-MODEL = "qwen3:4b-16k"
 MAX_MESSAGE_LENGTH = 16000
 MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024
 MAX_FILE_TEXT_LENGTH = 100000
@@ -199,6 +233,7 @@ MAX_GIT_TOTAL_TEXT_BYTES = 2 * 1024 * 1024
 
 HELP_MESSAGE = """Available commands:
 - /help: Show available slash commands and what they do.
+- /models: List currently available models.
 - /clear: Clear uploaded knowledge/context for your current session.
 - /vectordb: Show in-memory vector database statistics.
 - /git <repository-url>: Clone and index a repository for RAG queries in this session."""
@@ -626,6 +661,40 @@ def stream():
     if user_message == "/help":
         return Response(
             sse({"type": "token", "content": HELP_MESSAGE}) + sse({"type": "done"}),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    if user_message == "/models":
+        try:
+            models = _list_available_models()
+        except Exception as exc:
+            return Response(
+                sse({"type": "error", "error": f"Unable to list models: {exc}"}),
+                status=502,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        if models:
+            model_lines = "\n".join(f"- {model}" for model in models)
+            current_model = OPENCLAW_AGENT_MODEL if OLLAMA_BEARER_TOKEN else OLLAMA_MODEL
+            content = (
+                f"Current model: {current_model}\n"
+                "Available models:\n"
+                f"{model_lines}"
+            )
+        else:
+            content = "No models were returned by the configured API endpoint."
+
+        return Response(
+            sse({"type": "token", "content": content}) + sse({"type": "done"}),
             mimetype="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
