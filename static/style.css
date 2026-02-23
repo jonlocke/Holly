@@ -452,10 +452,6 @@ body.cyberpunk .input-bar {
     border-color: #00eaff;
 }
 
-body.cyberpunk .avatar-column {
-    background: rgba(26, 12, 51, 0.30);
-}
-
 body.cyberpunk .app,
 body.cyberpunk .chat-container,
 body.cyberpunk .input-stack,
