@@ -15,13 +15,20 @@ from urllib import error as urllib_error
 from math import sqrt
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
+_configured_secret = os.environ.get("FLASK_SECRET_KEY", "").strip()
+app.secret_key = _configured_secret or secrets.token_hex(32)
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+if not _configured_secret:
+    logger.warning(
+        "FLASK_SECRET_KEY is not set; using a random in-memory secret. "
+        "If you run multiple workers or restart often, Flask sessions will rotate and appear as new sessions."
+    )
 
 DEFAULT_LOCAL_OLLAMA_API_BASE = "http://localhost:11434"
 DEFAULT_LOCAL_OLLAMA_MODEL = "qwen3:4b-16k"
@@ -214,6 +221,13 @@ def _stream_chat_tokens(prompt: str, session_id: str | None = None):
         if session_id:
             request_headers[OPENCLAW_SESSION_HEADER] = session_id
 
+        logger.info(
+            "OpenClaw chat request session debug: flask_session_id=%s header=%s value=%s",
+            _short_session(session_id),
+            OPENCLAW_SESSION_HEADER,
+            _short_session(request_headers.get(OPENCLAW_SESSION_HEADER)),
+        )
+
         req = urllib_request.Request(
             endpoint,
             data=body,
@@ -375,7 +389,16 @@ def _get_session_id() -> str:
     if not session_id:
         session_id = secrets.token_hex(16)
         session["session_id"] = session_id
+        logger.info("Created new Flask session_id=%s", session_id)
     return session_id
+
+
+def _short_session(session_id: str | None) -> str:
+    if not session_id:
+        return "none"
+    if len(session_id) <= 8:
+        return session_id
+    return f"{session_id[:8]}..."
 
 
 def _chunk_text(text: str) -> list[str]:
@@ -539,7 +562,7 @@ def _load_git_repo_texts(repo_path: str) -> tuple[list[str], int, int]:
 
 
 def _index_git_repository(session_id: str, repo_url: str) -> tuple[int, int]:
-    with tempfile.TemporaryDirectory(prefix="clyde-git-") as clone_parent:
+    with tempfile.TemporaryDirectory(prefix="holly-git-") as clone_parent:
         clone_path = os.path.join(clone_parent, "repo")
         subprocess.run(
             ["git", "clone", "--depth", "1", repo_url, clone_path],
@@ -699,7 +722,14 @@ def stream():
         )
 
     user_message = user_message.strip()
-    _append_question_history(session_id=_get_session_id(), question=user_message)
+    request_session_id = _get_session_id()
+    logger.info(
+        "Incoming /stream request session debug: flask_session_id=%s has_cookie=%s remote_addr=%s",
+        _short_session(request_session_id),
+        bool(request.cookies.get(app.config.get("SESSION_COOKIE_NAME", "session"))),
+        request.remote_addr,
+    )
+    _append_question_history(session_id=request_session_id, question=user_message)
 
     if user_message == "/help":
         return Response(
@@ -805,7 +835,7 @@ def stream():
             },
         )
 
-    session_id = _get_session_id()
+    session_id = request_session_id
 
     if user_message.startswith("/git"):
         parts = user_message.split(maxsplit=1)
