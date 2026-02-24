@@ -41,6 +41,7 @@ Both `main.py` and `main-cyberpunk.py` now read startup settings from environmen
 - `OLLAMA_BEARER_TOKEN` (optional bearer token for Ollama/OpenAI-compatible endpoints that require `Authorization: Bearer ...`)
 - `OPENCLAW_AGENT_MODEL` (default: `agent:holly`; used as the chat `model` when bearer-token/OpenAI-compatible mode is enabled)
 - `OPENCLAW_AGENT_ID` (default: `holly`; sent as `X-OpenClaw-Agent-Id` in bearer-token/OpenAI-compatible mode to force routing to that agent)
+- `OPENCLAW_SESSION_HEADER` (default: `X-OpenClaw-Session-Id`; sent with the Flask session id so OpenClaw can reuse one agent session across UX messages)
 
 ### RAG embedding model
 

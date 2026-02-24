@@ -121,6 +121,10 @@ def _openai_chat_completions_url() -> str:
 
 OPENCLAW_AGENT_MODEL = os.environ.get("OPENCLAW_AGENT_MODEL", "agent:holly").strip() or "agent:holly"
 OPENCLAW_AGENT_ID = os.environ.get("OPENCLAW_AGENT_ID", "holly").strip() or "holly"
+OPENCLAW_SESSION_HEADER = (
+    os.environ.get("OPENCLAW_SESSION_HEADER", "X-OpenClaw-Session-Id").strip()
+    or "X-OpenClaw-Session-Id"
+)
 
 
 def _list_available_models() -> list[str]:
@@ -188,7 +192,7 @@ def _list_available_models() -> list[str]:
     return sorted(set(models))
 
 
-def _stream_chat_tokens(prompt: str):
+def _stream_chat_tokens(prompt: str, session_id: str | None = None):
     if OLLAMA_BEARER_TOKEN:
         endpoint = _openai_chat_completions_url()
         logger.info("Chat request -> POST %s (bearer auth)", endpoint)
@@ -201,15 +205,20 @@ def _stream_chat_tokens(prompt: str):
             }
         ).encode("utf-8")
 
+        request_headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OLLAMA_BEARER_TOKEN}",
+            "X-OpenClaw-Agent-Id": OPENCLAW_AGENT_ID,
+        }
+
+        if session_id:
+            request_headers[OPENCLAW_SESSION_HEADER] = session_id
+
         req = urllib_request.Request(
             endpoint,
             data=body,
             method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {OLLAMA_BEARER_TOKEN}",
-                "X-OpenClaw-Agent-Id": OPENCLAW_AGENT_ID,
-            },
+            headers=request_headers,
         )
 
         try:
@@ -891,7 +900,7 @@ def stream():
                     f"{context}\n\nUser question: {user_message}"
                 )
 
-            for content in _stream_chat_tokens(final_prompt):
+            for content in _stream_chat_tokens(final_prompt, session_id=session_id):
                 yield sse({"type": "token", "content": content})
 
             yield sse({"type": "done"})
