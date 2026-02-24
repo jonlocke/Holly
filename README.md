@@ -1,6 +1,6 @@
-# Clyde
+# Holly
 
-Clyde is an AI Agent.
+Holly is an AI Agent.
 
 ## Minimal setup (virtualenv)
 
@@ -29,7 +29,7 @@ pip install --require-hashes -r requirements.lock
 ```
 
 Commit `requirements.lock` whenever dependencies change.
-Clyde is an AI Agent
+Holly is an AI Agent
 
 ## Runtime configuration
 Both `main.py` and `main-cyberpunk.py` now read startup settings from environment variables:
