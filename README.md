@@ -101,23 +101,23 @@ Optional build variables:
 Install the generated package:
 
 ```bash
-sudo dpkg -i dist/clyde-ux_*.deb
+sudo dpkg -i dist/holly-ux_*.deb
 ```
 
 The package installs:
 
-- application files in `/opt/clyde-ux`
-- service unit in `/lib/systemd/system/clyde-ux.service`
-- runtime env defaults in `/etc/default/clyde-ux`
+- application files in `/opt/holly-ux`
+- service unit in `/lib/systemd/system/holly-ux.service`
+- runtime env defaults in `/etc/default/holly-ux`
 
 Manage the service:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now clyde-ux.service
-sudo systemctl status clyde-ux.service
-sudo systemctl restart clyde-ux.service
-sudo systemctl stop clyde-ux.service
+sudo systemctl enable --now holly-ux.service
+sudo systemctl status holly-ux.service
+sudo systemctl restart holly-ux.service
+sudo systemctl stop holly-ux.service
 ```
 
-After install, adjust runtime variables in `/etc/default/clyde-ux` (notably `OLLAMA_API_BASE` and `OLLAMA_MODEL`) and restart the service.
+After install, adjust runtime variables in `/etc/default/holly-ux` (notably `OLLAMA_API_BASE` and `OLLAMA_MODEL`) and restart the service.
