@@ -1,4 +1,4 @@
-# Default runtime configuration for clyde-ux.service.
+# Default runtime configuration for holly-ux.service.
 # Override these values if needed.
 APP_ENV=production
 FLASK_DEBUG=0
