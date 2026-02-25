@@ -5,9 +5,13 @@ import logging
 import os
 from pathlib import Path
 import secrets
-import subprocess
+import shutil
+import subprocess  # nosec B404 - subprocess is required for git clone; calls are constrained and validated.
 import tempfile
 import threading
+import time
+import ipaddress
+import re
 from urllib.parse import urlparse
 from urllib import request as urllib_request
 from urllib import error as urllib_error
@@ -33,6 +37,10 @@ if not _configured_secret:
 DEFAULT_LOCAL_OLLAMA_API_BASE = "http://localhost:11434"
 DEFAULT_LOCAL_OLLAMA_MODEL = "qwen3:4b-16k"
 DEFAULT_LOCAL_OLLAMA_EMBED_MODEL = "nomic-embed-text"
+ALLOWED_OUTBOUND_SCHEMES = {"http", "https"}
+ALLOWED_GIT_URL_SCHEMES = {"http", "https"}
+HOSTNAME_PATTERN = re.compile(r"^(?=.{1,253}$)(?!-)[a-zA-Z0-9.-]+(?<!-)$")
+GIT_EXECUTABLE = shutil.which("git")
 
 
 def is_local_development() -> bool:
@@ -40,9 +48,79 @@ def is_local_development() -> bool:
     return env.lower() in {"dev", "development", "local"}
 
 
+if not is_local_development():
+    app.config.update(
+        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+    )
+
+
 def _validate_ollama_api_base(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _is_valid_hostname(hostname: str) -> bool:
+    if not hostname:
+        return False
+    try:
+        ipaddress.ip_address(hostname)
+        return True
+    except ValueError:
+        return bool(HOSTNAME_PATTERN.fullmatch(hostname))
+
+
+def _validate_outbound_http_url(url: str) -> str:
+    target = (url or "").strip()
+    if not target:
+        raise ValueError("Outbound URL is empty.")
+
+    parsed = urlparse(target)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ALLOWED_OUTBOUND_SCHEMES:
+        raise ValueError(f"Outbound URL scheme '{parsed.scheme}' is not allowed.")
+
+    hostname = parsed.hostname
+    if not _is_valid_hostname(hostname or ""):
+        raise ValueError(f"Outbound URL host '{hostname}' is invalid.")
+
+    if parsed.username or parsed.password:
+        raise ValueError("Outbound URL userinfo is not allowed.")
+
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"Outbound URL port is invalid: {exc}") from exc
+
+    return target
+
+
+def _validate_git_repo_url(repo_url: str) -> str:
+    target = (repo_url or "").strip()
+    if not target:
+        raise ValueError("Repository URL is empty.")
+
+    parsed = urlparse(target)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ALLOWED_GIT_URL_SCHEMES:
+        raise ValueError(
+            f"Unsupported repository URL scheme '{parsed.scheme}'. "
+            "Use one of: http, https."
+        )
+
+    if not _is_valid_hostname(parsed.hostname or ""):
+        raise ValueError("Repository URL host is invalid.")
+
+    if parsed.username or parsed.password:
+        raise ValueError("Repository URL must not contain embedded credentials.")
+
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"Repository URL port is invalid: {exc}") from exc
+
+    return target
 
 
 def load_ollama_config() -> tuple[str, str, str]:
@@ -144,14 +222,15 @@ def _list_available_models() -> list[str]:
 
         last_error: Exception | None = None
         for endpoint in candidate_endpoints:
+            safe_endpoint = _validate_outbound_http_url(endpoint)
             req = urllib_request.Request(
-                endpoint,
+                safe_endpoint,
                 method="GET",
                 headers={"Authorization": f"Bearer {OLLAMA_BEARER_TOKEN}"},
             )
 
             try:
-                with urllib_request.urlopen(req, timeout=30) as response:
+                with urllib_request.urlopen(req, timeout=30) as response:  # nosec B310 - URL is validated by _validate_outbound_http_url.
                     payload = json.loads(response.read().decode("utf-8", errors="ignore") or "{}")
             except Exception as exc:
                 last_error = exc
@@ -185,9 +264,9 @@ def _list_available_models() -> list[str]:
         return sorted(set(models))
 
     # Fallback for older Ollama client/server combinations.
-    tags_url = f"{OLLAMA_API_BASE.rstrip('/')}/api/tags"
+    tags_url = _validate_outbound_http_url(f"{OLLAMA_API_BASE.rstrip('/')}/api/tags")
     req = urllib_request.Request(tags_url, method="GET")
-    with urllib_request.urlopen(req, timeout=30) as response:
+    with urllib_request.urlopen(req, timeout=30) as response:  # nosec B310 - URL is validated by _validate_outbound_http_url.
         payload = json.loads(response.read().decode("utf-8", errors="ignore") or "{}")
 
     for item in payload.get("models", []):
@@ -201,7 +280,7 @@ def _list_available_models() -> list[str]:
 
 def _stream_chat_tokens(prompt: str, session_id: str | None = None):
     if OLLAMA_BEARER_TOKEN:
-        endpoint = _openai_chat_completions_url()
+        endpoint = _validate_outbound_http_url(_openai_chat_completions_url())
         logger.info("Chat request -> POST %s (bearer auth)", endpoint)
 
         body = json.dumps(
@@ -236,7 +315,7 @@ def _stream_chat_tokens(prompt: str, session_id: str | None = None):
         )
 
         try:
-            with urllib_request.urlopen(req, timeout=120) as response:
+            with urllib_request.urlopen(req, timeout=120) as response:  # nosec B310 - URL is validated by _validate_outbound_http_url.
                 for raw_line in response:
                     line = raw_line.decode("utf-8", errors="ignore").strip()
                     if not line.startswith("data:"):
@@ -311,6 +390,18 @@ QUESTION_HISTORY_LIMIT = 200
 QUESTION_HISTORY_FILE = Path(
     os.environ.get("QUESTION_HISTORY_FILE", Path(__file__).with_name("question_history.json"))
 )
+_rate_limit_lock = threading.Lock()
+_rate_limit_events: dict[str, dict[str, list[float]]] = {
+    "stream": {},
+    "upload": {},
+    "git": {},
+}
+RATE_LIMIT_STREAM_MAX = int(os.environ.get("RATE_LIMIT_STREAM_MAX", "30"))
+RATE_LIMIT_STREAM_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_STREAM_WINDOW_SECONDS", "60"))
+RATE_LIMIT_UPLOAD_MAX = int(os.environ.get("RATE_LIMIT_UPLOAD_MAX", "10"))
+RATE_LIMIT_UPLOAD_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_UPLOAD_WINDOW_SECONDS", "60"))
+RATE_LIMIT_GIT_MAX = int(os.environ.get("RATE_LIMIT_GIT_MAX", "3"))
+RATE_LIMIT_GIT_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_GIT_WINDOW_SECONDS", "600"))
 
 
 def _load_question_history() -> dict[str, list[str]]:
@@ -343,6 +434,10 @@ def _save_question_history(history: dict[str, list[str]]) -> None:
     QUESTION_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     with QUESTION_HISTORY_FILE.open("w", encoding="utf-8") as history_file:
         json.dump(history, history_file, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(QUESTION_HISTORY_FILE, 0o600)
+    except OSError:
+        logger.warning("Unable to set owner-only permissions on '%s'.", QUESTION_HISTORY_FILE)
 
 
 def _append_question_history(session_id: str, question: str) -> None:
@@ -366,6 +461,31 @@ def _get_question_history(session_id: str) -> list[str]:
     with _question_history_lock:
         history = _load_question_history()
         return history.get(session_id, [])
+
+
+def _client_rate_limit_key() -> str:
+    x_forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if x_forwarded_for:
+        first_ip = x_forwarded_for.split(",")[0].strip()
+        if first_ip:
+            return first_ip
+    return request.remote_addr or "unknown"
+
+
+def _check_rate_limit(scope: str, key: str, max_requests: int, window_seconds: int) -> tuple[bool, int]:
+    now = time.time()
+    with _rate_limit_lock:
+        scope_events = _rate_limit_events.setdefault(scope, {})
+        events = [ts for ts in scope_events.get(key, []) if now - ts < window_seconds]
+
+        if len(events) >= max_requests:
+            retry_after = max(1, int(window_seconds - (now - events[0])))
+            scope_events[key] = events
+            return True, retry_after
+
+        events.append(now)
+        scope_events[key] = events
+        return False, 0
 
 
 def _vector_store_stats() -> dict:
@@ -399,6 +519,11 @@ def _short_session(session_id: str | None) -> str:
     if len(session_id) <= 8:
         return session_id
     return f"{session_id[:8]}..."
+
+
+def _masked_session_suffix(session_id: str) -> str:
+    suffix = session_id[-4:] if len(session_id) >= 4 else session_id
+    return f"***{suffix}"
 
 
 def _chunk_text(text: str) -> list[str]:
@@ -562,15 +687,19 @@ def _load_git_repo_texts(repo_path: str) -> tuple[list[str], int, int]:
 
 
 def _index_git_repository(session_id: str, repo_url: str) -> tuple[int, int]:
+    if not GIT_EXECUTABLE:
+        raise RuntimeError("Git executable not found on PATH.")
+
+    safe_repo_url = _validate_git_repo_url(repo_url)
     with tempfile.TemporaryDirectory(prefix="holly-git-") as clone_parent:
         clone_path = os.path.join(clone_parent, "repo")
         subprocess.run(
-            ["git", "clone", "--depth", "1", repo_url, clone_path],
+            [GIT_EXECUTABLE, "clone", "--depth", "1", safe_repo_url, clone_path],
             check=True,
             capture_output=True,
             text=True,
             timeout=120,
-        )
+        )  # nosec B603 - shell=False, absolute git path, and validated repo URL scheme/host.
 
         texts, scanned_files, total_text_bytes = _load_git_repo_texts(clone_path)
         if not texts:
@@ -615,6 +744,27 @@ def _index_git_repository(session_id: str, repo_url: str) -> tuple[int, int]:
     )
     return scanned_files, len(chunks)
 
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "font-src 'self' data:; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'"
+    )
+    return response
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -627,6 +777,26 @@ def health():
 
 @app.route("/upload", methods=["POST"])
 def upload_file():
+    client_key = _client_rate_limit_key()
+    limited, retry_after = _check_rate_limit(
+        "upload",
+        client_key,
+        RATE_LIMIT_UPLOAD_MAX,
+        RATE_LIMIT_UPLOAD_WINDOW_SECONDS,
+    )
+    if limited:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "Rate limit exceeded for uploads. "
+                        f"Try again in about {retry_after} seconds."
+                    )
+                }
+            ),
+            429,
+        )
+
     if "file" not in request.files:
         return jsonify({"error": "No file provided."}), 400
 
@@ -703,6 +873,32 @@ def sse(data: dict) -> str:
 
 @app.route("/stream", methods=["POST"])
 def stream():
+    client_key = _client_rate_limit_key()
+    stream_limited, stream_retry_after = _check_rate_limit(
+        "stream",
+        client_key,
+        RATE_LIMIT_STREAM_MAX,
+        RATE_LIMIT_STREAM_WINDOW_SECONDS,
+    )
+    if stream_limited:
+        return Response(
+            sse(
+                {
+                    "type": "error",
+                    "error": (
+                        "Rate limit exceeded for streaming requests. "
+                        f"Try again in about {stream_retry_after} seconds."
+                    ),
+                }
+            ),
+            status=429,
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     payload = request.get_json(silent=True) or {}
     user_message = payload.get("message")
 
@@ -805,7 +1001,7 @@ def stream():
     if user_message == "/vectordb":
         stats = _vector_store_stats()
         session_lines = [
-            f"- {sid}: {count} chunks"
+            f"- {_masked_session_suffix(sid)}: {count} chunks"
             for sid, count in sorted(
                 stats["session_chunk_counts"].items(),
                 key=lambda item: item[1],
@@ -838,6 +1034,31 @@ def stream():
     session_id = request_session_id
 
     if user_message.startswith("/git"):
+        git_limited, git_retry_after = _check_rate_limit(
+            "git",
+            client_key,
+            RATE_LIMIT_GIT_MAX,
+            RATE_LIMIT_GIT_WINDOW_SECONDS,
+        )
+        if git_limited:
+            return Response(
+                sse(
+                    {
+                        "type": "error",
+                        "error": (
+                            "Rate limit exceeded for /git requests. "
+                            f"Try again in about {git_retry_after} seconds."
+                        ),
+                    }
+                ),
+                status=429,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
         parts = user_message.split(maxsplit=1)
         if len(parts) < 2 or not parts[1].strip():
             return Response(
@@ -950,6 +1171,6 @@ def stream():
 
 if __name__ == "__main__":
     debug = os.getenv("FLASK_DEBUG", "0") == "1"
-    host = os.getenv("HOST", "0.0.0.0")
+    host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "5000"))
     app.run(debug=debug, threaded=True, host=host, port=port)
