@@ -55,7 +55,6 @@ mkdir -p "${DEBIAN_DIR}" "${APP_STAGE_DIR}" "${STAGE_ROOT}/lib/systemd/system" "
 
 # Copy runtime assets into the installed application directory.
 install -m 0644 "${REPO_ROOT}/main.py" "${APP_STAGE_DIR}/main.py"
-install -m 0644 "${REPO_ROOT}/main-cyberpunk.py" "${APP_STAGE_DIR}/main-cyberpunk.py"
 install -m 0644 "${REPO_ROOT}/requirements.txt" "${APP_STAGE_DIR}/requirements.txt"
 install -m 0644 "${REPO_ROOT}/README.md" "${APP_STAGE_DIR}/README.md"
 install -m 0644 "${REPO_ROOT}/LICENSE" "${APP_STAGE_DIR}/LICENSE"
@@ -138,7 +137,7 @@ APP_NAME="holly-ux"
 SERVICE_NAME="${APP_NAME}.service"
 
 if command -v systemctl >/dev/null 2>&1; then
-  if [[ "$1" == "remove" ]]; then
+  if [[ "$1" == "remove" || "$1" == "deconfigure" || "$1" == "upgrade" || "$1" == "failed-upgrade" ]]; then
     systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
     systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
   fi
@@ -150,9 +149,15 @@ cat > "${DEBIAN_DIR}/postrm" <<'POSTRM'
 set -e
 
 APP_NAME="holly-ux"
+SERVICE_NAME="${APP_NAME}.service"
 
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl daemon-reload || true
+  if [[ "$1" == "remove" || "$1" == "purge" || "$1" == "failed-upgrade" || "$1" == "abort-install" || "$1" == "abort-upgrade" || "$1" == "disappear" ]]; then
+    systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    systemctl daemon-reload || true
+    systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
+  fi
 fi
 
 if [[ "$1" == "purge" ]]; then
