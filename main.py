@@ -12,6 +12,7 @@ import threading
 import time
 import ipaddress
 import re
+import socket
 from urllib.parse import urlparse
 from urllib import request as urllib_request
 from urllib import error as urllib_error
@@ -96,6 +97,30 @@ def _validate_outbound_http_url(url: str) -> str:
     return target
 
 
+def _resolve_hostname_ips(hostname: str) -> list[ipaddress._BaseAddress]:
+    resolved: list[ipaddress._BaseAddress] = []
+    for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+        if not sockaddr:
+            continue
+        ip_str = sockaddr[0]
+        try:
+            resolved.append(ipaddress.ip_address(ip_str))
+        except ValueError:
+            continue
+    return resolved
+
+
+def _is_blocked_network_address(ip: ipaddress._BaseAddress) -> bool:
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
 def _validate_git_repo_url(repo_url: str) -> str:
     target = (repo_url or "").strip()
     if not target:
@@ -113,12 +138,24 @@ def _validate_git_repo_url(repo_url: str) -> str:
         raise ValueError("Repository URL host is invalid.")
 
     if parsed.username or parsed.password:
-        raise ValueError("Repository URL must not contain embedded credentials.")
+        raise ValueError("Repository URL must not include embedded credentials.")
 
     try:
         _ = parsed.port
     except ValueError as exc:
         raise ValueError(f"Repository URL port is invalid: {exc}") from exc
+
+    try:
+        resolved_ips = _resolve_hostname_ips(parsed.hostname or "")
+    except socket.gaierror as exc:
+        raise RuntimeError(f"Unable to resolve repository hostname '{parsed.hostname}'.") from exc
+
+    if not resolved_ips:
+        raise RuntimeError(f"Unable to resolve repository hostname '{parsed.hostname}'.")
+
+    for ip in resolved_ips:
+        if _is_blocked_network_address(ip):
+            raise ValueError(f"Repository URL resolves to blocked network address: {ip}")
 
     return target
 
@@ -357,6 +394,7 @@ def _stream_chat_tokens(prompt: str, session_id: str | None = None):
 
 
 MAX_MESSAGE_LENGTH = 16000
+MAX_STREAM_BODY_BYTES = 64 * 1024
 MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024
 MAX_FILE_TEXT_LENGTH = 100000
 CHUNK_SIZE = 900
@@ -366,6 +404,7 @@ RAG_RESULTS = 4
 MAX_GIT_FILES = 1000
 MAX_GIT_FILE_SIZE_BYTES = 512 * 1024
 MAX_GIT_TOTAL_TEXT_BYTES = 2 * 1024 * 1024
+GIT_ENDPOINT_TOKEN = os.environ.get("GIT_ENDPOINT_TOKEN", "").strip()
 
 HELP_MESSAGE = """Available commands:
 - /help: Show available slash commands and what they do.
@@ -486,6 +525,18 @@ def _check_rate_limit(scope: str, key: str, max_requests: int, window_seconds: i
         events.append(now)
         scope_events[key] = events
         return False, 0
+
+
+def _extract_git_auth_token() -> str:
+    header_token = (request.headers.get("X-Holly-Git-Token") or "").strip()
+    if header_token:
+        return header_token
+
+    auth_header = (request.headers.get("Authorization") or "").strip()
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+
+    return ""
 
 
 def _vector_store_stats() -> dict:
@@ -899,6 +950,18 @@ def stream():
             },
         )
 
+    content_length = request.content_length or 0
+    if content_length > MAX_STREAM_BODY_BYTES:
+        return Response(
+            sse({"type": "error", "error": "Request body is too large."}),
+            status=413,
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     payload = request.get_json(silent=True) or {}
     user_message = payload.get("message")
 
@@ -1034,6 +1097,29 @@ def stream():
     session_id = request_session_id
 
     if user_message.startswith("/git"):
+        if not GIT_ENDPOINT_TOKEN:
+            return Response(
+                sse({"type": "error", "error": "The /git endpoint is disabled by server configuration."}),
+                status=503,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        provided_git_token = _extract_git_auth_token()
+        if not provided_git_token or not secrets.compare_digest(provided_git_token, GIT_ENDPOINT_TOKEN):
+            return Response(
+                sse({"type": "error", "error": "Unauthorized"}),
+                status=401,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
         git_limited, git_retry_after = _check_rate_limit(
             "git",
             client_key,
@@ -1156,8 +1242,9 @@ def stream():
 
             yield sse({"type": "done"})
 
-        except Exception as e:
-            yield sse({"type": "error", "error": str(e)})
+        except Exception:
+            logger.exception("Unhandled error while generating stream response.")
+            yield sse({"type": "error", "error": "Unable to process request right now."})
 
     return Response(
         generate(),
