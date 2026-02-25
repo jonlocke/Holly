@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="clyde-ux"
+APP_NAME="holly-ux"
 APP_DIR="/opt/${APP_NAME}"
 SERVICE_NAME="${APP_NAME}.service"
-MAINTAINER="Clyde Maintainers"
-DESCRIPTION="Clyde UX Flask application service"
+MAINTAINER="Holly Maintainers"
+DESCRIPTION="Holly UX Flask application service"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -92,7 +92,7 @@ Maintainer: ${MAINTAINER}
 Depends: adduser, systemd
 Installed-Size: ${INSTALLED_SIZE}
 Description: ${DESCRIPTION}
- Web UX service for Clyde, packaged with a dedicated Python virtualenv.
+ Web UX service for Holly, packaged with a dedicated Python virtualenv.
 CONTROL
 
 cat > "${DEBIAN_DIR}/conffiles" <<CONFFILES
@@ -103,16 +103,16 @@ cat > "${DEBIAN_DIR}/postinst" <<'POSTINST'
 #!/usr/bin/env bash
 set -e
 
-APP_NAME="clyde-ux"
+APP_NAME="holly-ux"
 SERVICE_NAME="${APP_NAME}.service"
 APP_DIR="/opt/${APP_NAME}"
 
-if ! id -u clyde >/dev/null 2>&1; then
-  adduser --system --group --home /var/lib/${APP_NAME} --no-create-home clyde
+if ! id -u holly >/dev/null 2>&1; then
+  adduser --system --group --home /var/lib/${APP_NAME} --no-create-home holly
 fi
 
-install -d -o clyde -g clyde /var/lib/${APP_NAME} /var/log/${APP_NAME}
-chown -R clyde:clyde "${APP_DIR}" || true
+install -d -o holly -g holly /var/lib/${APP_NAME} /var/log/${APP_NAME}
+chown -R holly:holly "${APP_DIR}" || true
 
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true
@@ -134,7 +134,7 @@ cat > "${DEBIAN_DIR}/prerm" <<'PRERM'
 #!/usr/bin/env bash
 set -e
 
-APP_NAME="clyde-ux"
+APP_NAME="holly-ux"
 SERVICE_NAME="${APP_NAME}.service"
 
 if command -v systemctl >/dev/null 2>&1; then
@@ -149,7 +149,7 @@ cat > "${DEBIAN_DIR}/postrm" <<'POSTRM'
 #!/usr/bin/env bash
 set -e
 
-APP_NAME="clyde-ux"
+APP_NAME="holly-ux"
 
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true

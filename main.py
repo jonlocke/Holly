@@ -129,8 +129,8 @@ def _openai_chat_completions_url() -> str:
 OPENCLAW_AGENT_MODEL = os.environ.get("OPENCLAW_AGENT_MODEL", "agent:holly").strip() or "agent:holly"
 OPENCLAW_AGENT_ID = os.environ.get("OPENCLAW_AGENT_ID", "holly").strip() or "holly"
 OPENCLAW_SESSION_HEADER = (
-    os.environ.get("OPENCLAW_SESSION_HEADER", "X-OpenClaw-Session-Id").strip()
-    or "X-OpenClaw-Session-Id"
+    os.environ.get("OPENCLAW_SESSION_HEADER", "x-openclaw-session-key").strip()
+    or "x-openclaw-session-key"
 )
 
 
