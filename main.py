@@ -328,6 +328,7 @@ def _load_tts_upstream_total_timeout_seconds() -> float:
 
 TTS_MODE = os.environ.get("TTS_MODE", "").strip().lower()
 QWEN_TTS_URL = _resolve_qwen_tts_url()
+QWEN_TTS_HEALTH_URL = _resolve_qwen_tts_health_url()
 TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS = _load_tts_upstream_total_timeout_seconds()
 FRONTEND_TTS_AUTOPLAY = os.environ.get("FRONTEND_TTS_AUTOPLAY", "0").strip().lower() in {"1", "true", "yes", "on"}
 if QWEN_TTS_URL:
@@ -1019,10 +1020,9 @@ def text_to_speech_proxy():
         ).strip()
 
     if TTS_MODE == "qwen3":
-        qwen_tts_health_url = _resolve_qwen_tts_health_url()
         qwen3_tts_speak_url = _resolve_qwen3_tts_speak_url()
 
-        if not qwen_tts_health_url or not qwen3_tts_speak_url:
+        if not QWEN_TTS_HEALTH_URL or not qwen3_tts_speak_url:
             return jsonify({"error": "QWEN_TTS_API_BASE is not configured."}), 503
 
         try:
