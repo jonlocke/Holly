@@ -322,7 +322,6 @@ def _load_tts_upstream_total_timeout_seconds() -> float:
 TTS_MODE = os.environ.get("TTS_MODE", "").strip().lower()
 QWEN_TTS_URL = _resolve_qwen_tts_url()
 QWEN_TTS_HEALTH_URL = _resolve_qwen_tts_health_url()
-QWEN3_TTS_SPEAK_URL = _resolve_qwen3_tts_speak_url()
 TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS = _load_tts_upstream_total_timeout_seconds()
 FRONTEND_TTS_AUTOPLAY = os.environ.get("FRONTEND_TTS_AUTOPLAY", "0").strip().lower() in {"1", "true", "yes", "on"}
 if QWEN_TTS_URL:
@@ -1014,7 +1013,9 @@ def text_to_speech_proxy():
         ).strip()
 
     if TTS_MODE == "qwen3":
-        if not QWEN_TTS_HEALTH_URL or not QWEN3_TTS_SPEAK_URL:
+        qwen3_tts_speak_url = _resolve_qwen3_tts_speak_url()
+
+        if not QWEN_TTS_HEALTH_URL or not qwen3_tts_speak_url:
             return jsonify({"error": "QWEN_TTS_API_BASE is not configured."}), 503
 
         try:
@@ -1032,7 +1033,7 @@ def text_to_speech_proxy():
                 }
             ), 200
 
-        target_tts_url = QWEN3_TTS_SPEAK_URL
+        target_tts_url = qwen3_tts_speak_url
     else:
         if not QWEN_TTS_URL:
             return jsonify({"error": "QWEN_TTS_API_BASE is not configured."}), 503
@@ -1043,6 +1044,8 @@ def text_to_speech_proxy():
     except ValueError as exc:
         logger.error("Invalid QWEN TTS URL '%s': %s", target_tts_url, exc)
         return jsonify({"error": f"Invalid QWEN TTS URL: {exc}"}), 500
+
+    logger.info("Forwarding TTS request to %s", safe_url)
 
     req = urllib_request.Request(
         safe_url,

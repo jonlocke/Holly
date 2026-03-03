@@ -55,7 +55,7 @@ class Qwen3TTSFallbackTests(unittest.TestCase):
         with (
             mock.patch.object(self.main, "TTS_MODE", "qwen3"),
             mock.patch.object(self.main, "QWEN_TTS_HEALTH_URL", health_url),
-            mock.patch.object(self.main, "QWEN3_TTS_SPEAK_URL", speak_url),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_speak_url", return_value=speak_url),
             mock.patch.object(self.main.urllib_request, "urlopen", side_effect=fake_urlopen) as mocked_urlopen,
         ):
             response = self.client.post("/text-to-speech", json={"text": "Hello from test"})
@@ -74,7 +74,7 @@ class Qwen3TTSFallbackTests(unittest.TestCase):
         with (
             mock.patch.object(self.main, "TTS_MODE", "qwen3"),
             mock.patch.object(self.main, "QWEN_TTS_HEALTH_URL", health_url),
-            mock.patch.object(self.main, "QWEN3_TTS_SPEAK_URL", speak_url),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_speak_url", return_value=speak_url),
             mock.patch.object(
                 self.main.urllib_request,
                 "urlopen",
@@ -105,7 +105,7 @@ class Qwen3TTSFallbackTests(unittest.TestCase):
         with (
             mock.patch.object(self.main, "TTS_MODE", "qwen3"),
             mock.patch.object(self.main, "QWEN_TTS_HEALTH_URL", health_url),
-            mock.patch.object(self.main, "QWEN3_TTS_SPEAK_URL", speak_url),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_speak_url", return_value=speak_url),
             mock.patch.object(self.main, "TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS", 0.05),
             mock.patch.object(self.main.urllib_request, "urlopen", side_effect=fake_urlopen) as mocked_urlopen,
         ):
