@@ -283,7 +283,13 @@ def _resolve_qwen3_tts_speak_url() -> str | None:
     base = os.environ.get("QWEN_TTS_API_BASE", "").strip().rstrip("/")
     if not base:
         return None
-    return f"{base}/speak"
+
+    speak_query = os.environ.get("QWEN3_TTS_SPEAK_QUERY", "return_audio=true&play=false").strip()
+    if not speak_query:
+        return f"{base}/speak"
+
+    normalized_query = speak_query[1:] if speak_query.startswith("?") else speak_query
+    return f"{base}/speak?{normalized_query}"
 
 
 def _load_tts_upstream_total_timeout_seconds() -> float:

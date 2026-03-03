@@ -46,6 +46,7 @@ Both `main.py` and `main-cyberpunk.py` now read startup settings from environmen
 - `QWEN_TTS_API_BASE` (optional; when set, enables a `/text-to-speech` proxy endpoint)
 - `QWEN_TTS_ENDPOINT_STYLE` (optional; default: `quick` → upstream path `/speak`; also supports `openai` → `/v1/audio/speech`, `legacy` → `/text-to-speech`; primarily used outside `TTS_MODE=qwen3`)
 - `QWEN_TTS_ENDPOINT` (optional; overrides endpoint style with an explicit upstream path; primarily used outside `TTS_MODE=qwen3`)
+- `QWEN3_TTS_SPEAK_QUERY` (optional; default: `return_audio=true&play=false`; appended to `/speak` when `TTS_MODE=qwen3`)
 - `TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS` (optional; default: `20`; strict total deadline for `/text-to-speech` upstream connect + response read before browser fallback is returned)
 
 ### RAG embedding model
@@ -90,7 +91,8 @@ Notes:
 - `OLLAMA_API_BASE` can be either the gateway root (`http://127.0.0.1:18789`) or `/v1` base (`http://127.0.0.1:18789/v1`).
 - When `QWEN_TTS_API_BASE` is set, Holly exposes `POST /text-to-speech` and forwards JSON payloads to the configured Qwen TTS backend.
   - In `TTS_MODE=qwen3`, Holly first checks `<QWEN_TTS_API_BASE>/health`.
-  - If `/health` is available, Holly sends TTS to `<QWEN_TTS_API_BASE>/speak`.
+  - If `/health` is available, Holly sends TTS to `<QWEN_TTS_API_BASE>/speak?return_audio=true&play=false` by default.
+  - Override qwen3 speak query params with `QWEN3_TTS_SPEAK_QUERY` (for example, set empty to call plain `/speak`).
   - If `/health` is unavailable/fails, Holly returns JSON fallback for browser speech: `{ "fallback": "browser_speak", "text": ... }`.
   - Outside `TTS_MODE=qwen3`, routing follows `QWEN_TTS_ENDPOINT` / `QWEN_TTS_ENDPOINT_STYLE`.
 
