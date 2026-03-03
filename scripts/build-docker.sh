@@ -23,4 +23,12 @@ docker build \
 echo
 
 echo "Built image: ${IMAGE_NAME}:${IMAGE_TAG}"
-echo "Run with: docker run --rm -p 5000:5000 ${IMAGE_NAME}:${IMAGE_TAG}"
+echo "Run with: docker run --rm \
+--name holly-test \
+-p 5500:5000 \
+-e FLASK_DEBUG=1 -e OLLAMA_API_BASE=\"http://192.168.1.125:18789\" \
+-e OLLAMA_MODEL=\"$OLLAMA_MODEL\" \
+-e OLLAMA_BEARER_TOKEN=\"$OLLAMA_BEARER_TOKEN\" \
+-e QWEN_TTS_API_BASE=http://192.168.1.154:8765 \
+-e QWEN_TTS_ENDPOINT=/speak \
+holly-ux"
