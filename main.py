@@ -283,7 +283,14 @@ def _resolve_qwen3_tts_speak_url() -> str | None:
     base = os.environ.get("QWEN_TTS_API_BASE", "").strip().rstrip("/")
     if not base:
         return None
-    return f"{base}/speak"
+
+    query = os.environ.get("QWEN3_TTS_SPEAK_QUERY", "").strip()
+    query = query.strip("\"'")
+    if not query:
+        return f"{base}/speak"
+
+    normalized_query = query[1:] if query.startswith("?") else query
+    return f"{base}/speak?{normalized_query}"
 
 
 def _load_tts_upstream_total_timeout_seconds() -> float:
@@ -1019,7 +1026,7 @@ def text_to_speech_proxy():
             return jsonify({"error": "QWEN_TTS_API_BASE is not configured."}), 503
 
         try:
-            safe_health_url = _validate_outbound_http_url(QWEN_TTS_HEALTH_URL)
+            safe_health_url = _validate_outbound_http_url(qwen_tts_health_url)
             health_req = urllib_request.Request(safe_health_url, method="GET")
             with urllib_request.urlopen(health_req, timeout=5):  # nosec B310 - URL is validated by _validate_outbound_http_url.
                 pass
