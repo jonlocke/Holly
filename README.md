@@ -46,6 +46,7 @@ Both `main.py` and `main-cyberpunk.py` now read startup settings from environmen
 - `QWEN_TTS_API_BASE` (optional; when set, enables a `/text-to-speech` proxy endpoint)
 - `QWEN_TTS_ENDPOINT_STYLE` (optional; default: `quick` → upstream path `/speak`; also supports `openai` → `/v1/audio/speech`, `legacy` → `/text-to-speech`; primarily used outside `TTS_MODE=qwen3`)
 - `QWEN_TTS_ENDPOINT` (optional; overrides endpoint style with an explicit upstream path; primarily used outside `TTS_MODE=qwen3`)
+- `QWEN3_TTS_SPEAK_QUERY` (optional; only in `TTS_MODE=qwen3`; appends query params to `/speak`, e.g. `return_audio=true&play=false`)
 - `TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS` (optional; default: `20`; strict total deadline for `/text-to-speech` upstream connect + response read before browser fallback is returned)
 
 ### RAG embedding model
