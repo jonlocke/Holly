@@ -189,6 +189,65 @@ async function speakAssistantText(text) {
 
     stopSpeechPlayback();
 
+    const playAudioSource = async (src, fallbackText) => {
+        if (!src || typeof src !== "string") {
+            throw new Error("Invalid audio source from TTS response.");
+        }
+
+        const audio = new Audio(src);
+        activeSpeechAudio = audio;
+        audio.onended = () => {
+            if (activeSpeechAudio === audio) {
+                activeSpeechAudio = null;
+            }
+        };
+        audio.onerror = () => {
+            if (activeSpeechAudio === audio) {
+                activeSpeechAudio = null;
+            }
+            browserSpeak(fallbackText);
+        };
+        await audio.play();
+    };
+
+    const tryPlayAudioFromJson = async (payload, fallbackText) => {
+        if (!payload || typeof payload !== "object") {
+            return false;
+        }
+
+        if (payload?.fallback === "browser_speak") {
+            browserSpeak(payload?.text || fallbackText);
+            return true;
+        }
+
+        const base64Audio =
+            payload?.audio_base64 ||
+            payload?.audio ||
+            payload?.b64_audio ||
+            payload?.b64_json ||
+            payload?.data?.audio_base64 ||
+            payload?.data?.audio ||
+            payload?.data?.b64_audio;
+        const audioUrl = payload?.audio_url || payload?.url || payload?.data?.audio_url;
+
+        if (typeof audioUrl === "string" && audioUrl.trim()) {
+            await playAudioSource(audioUrl.trim(), fallbackText);
+            return true;
+        }
+
+        if (typeof base64Audio === "string" && base64Audio.trim()) {
+            const normalized = base64Audio.trim();
+            const mimeType = payload?.mime_type || payload?.content_type || "audio/wav";
+            const src = normalized.startsWith("data:")
+                ? normalized
+                : `data:${mimeType};base64,${normalized}`;
+            await playAudioSource(src, fallbackText);
+            return true;
+        }
+
+        return false;
+    };
+
     try {
         const response = await fetch("/text-to-speech", {
             method: "POST",
@@ -206,8 +265,7 @@ async function speakAssistantText(text) {
 
         if (contentType.includes("application/json")) {
             const payload = await response.json();
-            if (payload?.fallback === "browser_speak") {
-                browserSpeak(payload?.text || safeText);
+            if (await tryPlayAudioFromJson(payload, safeText)) {
                 return;
             }
             throw new Error(payload?.error || "Unexpected JSON response from TTS endpoint.");
