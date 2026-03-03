@@ -288,12 +288,15 @@ def _resolve_qwen3_tts_speak_url() -> str | None:
 
 def _load_tts_upstream_total_timeout_seconds() -> float:
     default_timeout = 20.0
-    raw = os.environ.get("TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS", str(default_timeout)).strip()
+    timeout_var_names = ["QWEN_TTS_TIMEOUT_SECONDS", "TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS"]
+    configured_var_name = next((name for name in timeout_var_names if os.environ.get(name)), None)
+    raw = os.environ.get(configured_var_name or timeout_var_names[-1], str(default_timeout)).strip()
     try:
         value = float(raw)
     except ValueError:
         logger.warning(
-            "Invalid TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS=%r; using %.1fs default.",
+            "Invalid %s=%r; using %.1fs default.",
+            configured_var_name or timeout_var_names[-1],
             raw,
             default_timeout,
         )
@@ -301,11 +304,18 @@ def _load_tts_upstream_total_timeout_seconds() -> float:
 
     if value <= 0:
         logger.warning(
-            "Non-positive TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS=%r; using %.1fs default.",
+            "Non-positive %s=%r; using %.1fs default.",
+            configured_var_name or timeout_var_names[-1],
             raw,
             default_timeout,
         )
         return default_timeout
+
+    if configured_var_name == "QWEN_TTS_TIMEOUT_SECONDS":
+        logger.info(
+            "Using QWEN_TTS_TIMEOUT_SECONDS=%.2fs for TTS upstream timeout.",
+            value,
+        )
     return value
 
 
