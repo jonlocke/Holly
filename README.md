@@ -42,6 +42,11 @@ Both `main.py` and `main-cyberpunk.py` now read startup settings from environmen
 - `OPENCLAW_AGENT_MODEL` (default: `agent:holly`; used as the chat `model` when bearer-token/OpenAI-compatible mode is enabled)
 - `OPENCLAW_AGENT_ID` (default: `holly`; sent as `X-OpenClaw-Agent-Id` in bearer-token/OpenAI-compatible mode to force routing to that agent)
 - `OPENCLAW_SESSION_HEADER` (default: `X-OpenClaw-Session-Id`; sent with the Flask session id so OpenClaw can reuse one agent session across UX messages)
+- `TTS_MODE` (optional; set `qwen3` to enable Qwen3 health-check + `/speak` behavior)
+- `QWEN_TTS_API_BASE` (optional; when set, enables a `/text-to-speech` proxy endpoint)
+- `QWEN_TTS_ENDPOINT_STYLE` (optional; default: `quick` → upstream path `/speak`; also supports `openai` → `/v1/audio/speech`, `legacy` → `/text-to-speech`; primarily used outside `TTS_MODE=qwen3`)
+- `QWEN_TTS_ENDPOINT` (optional; overrides endpoint style with an explicit upstream path; primarily used outside `TTS_MODE=qwen3`)
+- `TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS` (optional; default: `20`; strict total deadline for `/text-to-speech` upstream connect + response read before browser fallback is returned)
 
 ### RAG embedding model
 
@@ -83,6 +88,34 @@ python main.py
 Notes:
 - The app will call `POST /v1/chat/completions` when `OLLAMA_BEARER_TOKEN` is set.
 - `OLLAMA_API_BASE` can be either the gateway root (`http://127.0.0.1:18789`) or `/v1` base (`http://127.0.0.1:18789/v1`).
+- When `QWEN_TTS_API_BASE` is set, Holly exposes `POST /text-to-speech` and forwards JSON payloads to the configured Qwen TTS backend.
+  - In `TTS_MODE=qwen3`, Holly first checks `<QWEN_TTS_API_BASE>/health`.
+  - If `/health` is available, Holly sends TTS to `<QWEN_TTS_API_BASE>/speak`.
+  - If `/health` is unavailable/fails, Holly returns JSON fallback for browser speech: `{ "fallback": "browser_speak", "text": ... }`.
+  - Outside `TTS_MODE=qwen3`, routing follows `QWEN_TTS_ENDPOINT` / `QWEN_TTS_ENDPOINT_STYLE`.
+
+### TTS troubleshooting
+
+Recommended env for Qwen3 with health-check + `/speak` routing:
+
+```bash
+TTS_MODE=qwen3
+QWEN_TTS_API_BASE=http://192.168.1.154:8765
+```
+
+How to validate quickly:
+
+```bash
+curl -i http://192.168.1.154:8765/health
+curl -i -X POST http://127.0.0.1:5000/text-to-speech \
+  -H "Content-Type: application/json" \
+  -d '{"text":"TTS test from Holly"}'
+```
+
+Expected behavior:
+- If `/health` returns success, Holly sends TTS upstream to `/speak`.
+- If `/health` fails or is unreachable, Holly returns browser fallback JSON (`fallback: browser_speak`).
+- If you are not using `TTS_MODE=qwen3`, set `QWEN_TTS_ENDPOINT` or `QWEN_TTS_ENDPOINT_STYLE` for your provider route.
 
 ## Debian 13 package + systemd service
 

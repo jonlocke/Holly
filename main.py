@@ -13,6 +13,7 @@ import time
 import ipaddress
 import re
 import socket
+import queue
 from urllib.parse import urlparse
 from urllib import request as urllib_request
 from urllib import error as urllib_error
@@ -247,6 +248,75 @@ OPENCLAW_SESSION_HEADER = (
     os.environ.get("OPENCLAW_SESSION_HEADER", "x-openclaw-session-key").strip()
     or "x-openclaw-session-key"
 )
+
+
+def _resolve_qwen_tts_endpoint_path() -> str:
+    explicit = os.environ.get("QWEN_TTS_ENDPOINT", "").strip()
+    if explicit:
+        return explicit if explicit.startswith("/") else f"/{explicit}"
+
+    style = os.environ.get("QWEN_TTS_ENDPOINT_STYLE", "quick").strip().lower()
+    if style == "openai":
+        return "/v1/audio/speech"
+    if style in {"legacy", "text-to-speech", "text_to_speech"}:
+        return "/text-to-speech"
+    # quick/default: direct speak endpoint
+    return "/speak"
+
+
+def _resolve_qwen_tts_url() -> str | None:
+    base = os.environ.get("QWEN_TTS_API_BASE", "").strip().rstrip("/")
+    if not base:
+        return None
+    endpoint_path = _resolve_qwen_tts_endpoint_path()
+    return f"{base}{endpoint_path}"
+
+
+def _resolve_qwen_tts_health_url() -> str | None:
+    base = os.environ.get("QWEN_TTS_API_BASE", "").strip().rstrip("/")
+    if not base:
+        return None
+    return f"{base}/health"
+
+
+def _resolve_qwen3_tts_speak_url() -> str | None:
+    base = os.environ.get("QWEN_TTS_API_BASE", "").strip().rstrip("/")
+    if not base:
+        return None
+    return f"{base}/speak"
+
+
+def _load_tts_upstream_total_timeout_seconds() -> float:
+    default_timeout = 20.0
+    raw = os.environ.get("TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS", str(default_timeout)).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS=%r; using %.1fs default.",
+            raw,
+            default_timeout,
+        )
+        return default_timeout
+
+    if value <= 0:
+        logger.warning(
+            "Non-positive TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS=%r; using %.1fs default.",
+            raw,
+            default_timeout,
+        )
+        return default_timeout
+    return value
+
+
+TTS_MODE = os.environ.get("TTS_MODE", "").strip().lower()
+QWEN_TTS_URL = _resolve_qwen_tts_url()
+QWEN_TTS_HEALTH_URL = _resolve_qwen_tts_health_url()
+QWEN3_TTS_SPEAK_URL = _resolve_qwen3_tts_speak_url()
+TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS = _load_tts_upstream_total_timeout_seconds()
+FRONTEND_TTS_AUTOPLAY = os.environ.get("FRONTEND_TTS_AUTOPLAY", "0").strip().lower() in {"1", "true", "yes", "on"}
+if QWEN_TTS_URL:
+    logger.info("QWEN TTS proxy enabled: %s", QWEN_TTS_URL)
 
 
 def _list_available_models() -> list[str]:
@@ -818,7 +888,7 @@ def add_security_headers(response):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", frontend_tts_autoplay=FRONTEND_TTS_AUTOPLAY)
 
 
 @app.route("/health", methods=["GET"])
@@ -916,6 +986,116 @@ def upload_file():
 def get_question_history():
     session_id = _get_session_id()
     return jsonify({"history": _get_question_history(session_id)})
+
+
+@app.route("/text-to-speech", methods=["POST"])
+def text_to_speech_proxy():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+
+    fallback_text = ""
+    if isinstance(payload, dict):
+        fallback_text = str(
+            payload.get("text")
+            or payload.get("input")
+            or payload.get("message")
+            or ""
+        ).strip()
+
+    if TTS_MODE == "qwen3":
+        if not QWEN_TTS_HEALTH_URL or not QWEN3_TTS_SPEAK_URL:
+            return jsonify({"error": "QWEN_TTS_API_BASE is not configured."}), 503
+
+        try:
+            safe_health_url = _validate_outbound_http_url(QWEN_TTS_HEALTH_URL)
+            health_req = urllib_request.Request(safe_health_url, method="GET")
+            with urllib_request.urlopen(health_req, timeout=5):  # nosec B310 - URL is validated by _validate_outbound_http_url.
+                pass
+        except Exception as exc:
+            logger.warning("QWEN TTS health check failed: %s", exc)
+            return jsonify(
+                {
+                    "fallback": "browser_speak",
+                    "text": fallback_text,
+                    "reason": f"TTS health check failed: {exc}",
+                }
+            ), 200
+
+        target_tts_url = QWEN3_TTS_SPEAK_URL
+    else:
+        if not QWEN_TTS_URL:
+            return jsonify({"error": "QWEN_TTS_API_BASE is not configured."}), 503
+        target_tts_url = QWEN_TTS_URL
+
+    try:
+        safe_url = _validate_outbound_http_url(target_tts_url)
+    except ValueError as exc:
+        logger.error("Invalid QWEN TTS URL '%s': %s", target_tts_url, exc)
+        return jsonify({"error": f"Invalid QWEN TTS URL: {exc}"}), 500
+
+    req = urllib_request.Request(
+        safe_url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+
+    def _urlopen_and_read_with_deadline() -> tuple[bytes, int, str]:
+        result_queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
+
+        def _worker() -> None:
+            try:
+                with urllib_request.urlopen(req, timeout=TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS) as upstream:  # nosec B310 - URL is validated by _validate_outbound_http_url.
+                    body = upstream.read()
+                    content_type = upstream.headers.get("Content-Type", "application/octet-stream")
+                    result_queue.put(("ok", (body, upstream.status, content_type)))
+            except Exception as exc:
+                result_queue.put(("error", exc))
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        try:
+            kind, value = result_queue.get(timeout=TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS)
+        except queue.Empty as exc:
+            raise TimeoutError(
+                f"TTS upstream exceeded total timeout of {TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS:.2f}s"
+            ) from exc
+
+        if kind == "error":
+            if isinstance(value, Exception):
+                raise value
+            raise RuntimeError(f"Unexpected upstream error payload type: {type(value)!r}")
+
+        if not isinstance(value, tuple) or len(value) != 3:
+            raise RuntimeError("Unexpected upstream success payload shape.")
+        body, status, content_type = value
+        return body, status, content_type
+
+    try:
+        body, status, content_type = _urlopen_and_read_with_deadline()
+        return Response(body, status=status, content_type=content_type)
+    except urllib_error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="ignore")
+        logger.warning("QWEN TTS upstream error: %s %s", exc.code, error_body)
+        return jsonify(
+            {
+                "fallback": "browser_speak",
+                "text": fallback_text,
+                "reason": f"TTS upstream HTTP {exc.code}",
+                "upstreamError": error_body,
+            }
+        ), 200
+    except Exception as exc:
+        logger.exception("QWEN TTS proxy failed.")
+        return jsonify(
+            {
+                "fallback": "browser_speak",
+                "text": fallback_text,
+                "reason": f"Unable to reach TTS backend: {exc}",
+            }
+        ), 200
 
 
 def sse(data: dict) -> str:

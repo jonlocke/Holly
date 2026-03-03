@@ -144,6 +144,103 @@ let questionHistory = [];
 let historyCursor = -1;
 const MAX_MESSAGES = 100;
 let isStreaming = false;
+let activeSpeechAudio = null;
+const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
+
+function stopSpeechPlayback() {
+    if (activeSpeechAudio) {
+        activeSpeechAudio.pause();
+        activeSpeechAudio.src = "";
+        activeSpeechAudio = null;
+    }
+
+    if ("speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+    }
+}
+
+function browserSpeak(text) {
+    if (!("speechSynthesis" in window)) {
+        return;
+    }
+
+    const safeText = (text || "").trim();
+    if (!safeText) {
+        return;
+    }
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(safeText);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    window.speechSynthesis.speak(utterance);
+}
+
+async function speakAssistantText(text) {
+    const safeText = (text || "").trim();
+    if (!safeText) {
+        return;
+    }
+
+    if (!FRONTEND_TTS_AUTOPLAY) {
+        console.info("Frontend TTS autoplay disabled; skipping browser playback.");
+        return;
+    }
+
+    stopSpeechPlayback();
+
+    try {
+        const response = await fetch("/text-to-speech", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ text: safeText }),
+        });
+
+        const contentType = (response.headers.get("content-type") || "").toLowerCase();
+
+        if (!response.ok) {
+            throw new Error(`TTS request failed with status ${response.status}`);
+        }
+
+        if (contentType.includes("application/json")) {
+            const payload = await response.json();
+            if (payload?.fallback === "browser_speak") {
+                browserSpeak(payload?.text || safeText);
+                return;
+            }
+            throw new Error(payload?.error || "Unexpected JSON response from TTS endpoint.");
+        }
+
+        const audioBlob = await response.blob();
+        if (!audioBlob || audioBlob.size === 0) {
+            throw new Error("Empty audio payload from TTS endpoint.");
+        }
+
+        const objectUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(objectUrl);
+        activeSpeechAudio = audio;
+        audio.onended = () => {
+            URL.revokeObjectURL(objectUrl);
+            if (activeSpeechAudio === audio) {
+                activeSpeechAudio = null;
+            }
+        };
+        audio.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            if (activeSpeechAudio === audio) {
+                activeSpeechAudio = null;
+            }
+            browserSpeak(safeText);
+        };
+
+        await audio.play();
+    } catch (error) {
+        console.warn("TTS playback failed, using browser speech fallback.", error);
+        browserSpeak(safeText);
+    }
+}
 
 function setAvatarState(state) {
     hollyAvatar.classList.remove("avatar-waiting", "avatar-thinking", "avatar-smiling");
@@ -322,6 +419,7 @@ stopBtn.addEventListener("click", () => {
         currentStream.abort();
         currentStream = null;
     }
+    stopSpeechPlayback();
     isStreaming = false;
     setAvatarState(input.value.length ? "waiting" : "smiling");
     stopBtn.disabled = true;
@@ -491,8 +589,10 @@ function streamResponse(message) {
 
             if (cursorEl) cursorEl.remove();
 
+            const assistantText = textNode.nodeValue;
+
             // Render markdown once
-            const parsedHtml = marked.parse(textNode.nodeValue);
+            const parsedHtml = marked.parse(assistantText);
             const sanitizedHtml = DOMPurify.sanitize(parsedHtml, SANITIZE_CONFIG);
             bubble.innerHTML = sanitizedHtml;
 
@@ -501,6 +601,7 @@ function streamResponse(message) {
             stopBtn.disabled = true;
             setAvatarState("smiling");
 
+            speakAssistantText(assistantText);
             resetUi();
         }
 
