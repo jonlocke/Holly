@@ -283,7 +283,14 @@ def _resolve_qwen3_tts_speak_url() -> str | None:
     base = os.environ.get("QWEN_TTS_API_BASE", "").strip().rstrip("/")
     if not base:
         return None
-    return f"{base}/speak"
+
+    query = os.environ.get("QWEN3_TTS_SPEAK_QUERY", "").strip()
+    query = query.strip("\"'")
+    if not query:
+        return f"{base}/speak"
+
+    normalized_query = query[1:] if query.startswith("?") else query
+    return f"{base}/speak?{normalized_query}"
 
 
 def _load_tts_upstream_total_timeout_seconds() -> float:
@@ -321,8 +328,6 @@ def _load_tts_upstream_total_timeout_seconds() -> float:
 
 TTS_MODE = os.environ.get("TTS_MODE", "").strip().lower()
 QWEN_TTS_URL = _resolve_qwen_tts_url()
-QWEN_TTS_HEALTH_URL = _resolve_qwen_tts_health_url()
-QWEN3_TTS_SPEAK_URL = _resolve_qwen3_tts_speak_url()
 TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS = _load_tts_upstream_total_timeout_seconds()
 FRONTEND_TTS_AUTOPLAY = os.environ.get("FRONTEND_TTS_AUTOPLAY", "0").strip().lower() in {"1", "true", "yes", "on"}
 if QWEN_TTS_URL:
@@ -1014,11 +1019,14 @@ def text_to_speech_proxy():
         ).strip()
 
     if TTS_MODE == "qwen3":
-        if not QWEN_TTS_HEALTH_URL or not QWEN3_TTS_SPEAK_URL:
+        qwen_tts_health_url = _resolve_qwen_tts_health_url()
+        qwen3_tts_speak_url = _resolve_qwen3_tts_speak_url()
+
+        if not qwen_tts_health_url or not qwen3_tts_speak_url:
             return jsonify({"error": "QWEN_TTS_API_BASE is not configured."}), 503
 
         try:
-            safe_health_url = _validate_outbound_http_url(QWEN_TTS_HEALTH_URL)
+            safe_health_url = _validate_outbound_http_url(qwen_tts_health_url)
             health_req = urllib_request.Request(safe_health_url, method="GET")
             with urllib_request.urlopen(health_req, timeout=5):  # nosec B310 - URL is validated by _validate_outbound_http_url.
                 pass
@@ -1032,7 +1040,7 @@ def text_to_speech_proxy():
                 }
             ), 200
 
-        target_tts_url = QWEN3_TTS_SPEAK_URL
+        target_tts_url = qwen3_tts_speak_url
     else:
         if not QWEN_TTS_URL:
             return jsonify({"error": "QWEN_TTS_API_BASE is not configured."}), 503
@@ -1043,6 +1051,8 @@ def text_to_speech_proxy():
     except ValueError as exc:
         logger.error("Invalid QWEN TTS URL '%s': %s", target_tts_url, exc)
         return jsonify({"error": f"Invalid QWEN TTS URL: {exc}"}), 500
+
+    logger.info("Forwarding TTS request to %s", safe_url)
 
     req = urllib_request.Request(
         safe_url,

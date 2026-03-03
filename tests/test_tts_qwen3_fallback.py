@@ -41,6 +41,32 @@ class Qwen3TTSFallbackTests(unittest.TestCase):
         cls.main = module
         cls.client = module.app.test_client()
 
+    def test_resolve_qwen3_speak_url_includes_optional_query(self):
+        with mock.patch.dict(
+            self.main.os.environ,
+            {
+                "QWEN_TTS_API_BASE": "http://tts.internal",
+                "QWEN3_TTS_SPEAK_QUERY": "return_audio=true&play=false",
+            },
+            clear=False,
+        ):
+            resolved = self.main._resolve_qwen3_tts_speak_url()
+
+        self.assertEqual(resolved, "http://tts.internal/speak?return_audio=true&play=false")
+
+    def test_resolve_qwen3_speak_url_strips_wrapping_quotes_from_query(self):
+        with mock.patch.dict(
+            self.main.os.environ,
+            {
+                "QWEN_TTS_API_BASE": "http://tts.internal",
+                "QWEN3_TTS_SPEAK_QUERY": "'return_audio=true&play=false'",
+            },
+            clear=False,
+        ):
+            resolved = self.main._resolve_qwen3_tts_speak_url()
+
+        self.assertEqual(resolved, "http://tts.internal/speak?return_audio=true&play=false")
+
     def test_qwen3_healthy_probes_health_then_calls_speak(self):
         health_url = "http://tts.internal/health"
         speak_url = "http://tts.internal/speak"
@@ -54,8 +80,8 @@ class Qwen3TTSFallbackTests(unittest.TestCase):
 
         with (
             mock.patch.object(self.main, "TTS_MODE", "qwen3"),
-            mock.patch.object(self.main, "QWEN_TTS_HEALTH_URL", health_url),
-            mock.patch.object(self.main, "QWEN3_TTS_SPEAK_URL", speak_url),
+            mock.patch.object(self.main, "_resolve_qwen_tts_health_url", return_value=health_url),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_speak_url", return_value=speak_url),
             mock.patch.object(self.main.urllib_request, "urlopen", side_effect=fake_urlopen) as mocked_urlopen,
         ):
             response = self.client.post("/text-to-speech", json={"text": "Hello from test"})
@@ -73,8 +99,8 @@ class Qwen3TTSFallbackTests(unittest.TestCase):
 
         with (
             mock.patch.object(self.main, "TTS_MODE", "qwen3"),
-            mock.patch.object(self.main, "QWEN_TTS_HEALTH_URL", health_url),
-            mock.patch.object(self.main, "QWEN3_TTS_SPEAK_URL", speak_url),
+            mock.patch.object(self.main, "_resolve_qwen_tts_health_url", return_value=health_url),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_speak_url", return_value=speak_url),
             mock.patch.object(
                 self.main.urllib_request,
                 "urlopen",
@@ -104,8 +130,8 @@ class Qwen3TTSFallbackTests(unittest.TestCase):
 
         with (
             mock.patch.object(self.main, "TTS_MODE", "qwen3"),
-            mock.patch.object(self.main, "QWEN_TTS_HEALTH_URL", health_url),
-            mock.patch.object(self.main, "QWEN3_TTS_SPEAK_URL", speak_url),
+            mock.patch.object(self.main, "_resolve_qwen_tts_health_url", return_value=health_url),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_speak_url", return_value=speak_url),
             mock.patch.object(self.main, "TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS", 0.05),
             mock.patch.object(self.main.urllib_request, "urlopen", side_effect=fake_urlopen) as mocked_urlopen,
         ):
