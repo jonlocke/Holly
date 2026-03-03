@@ -285,6 +285,7 @@ def _resolve_qwen3_tts_speak_url() -> str | None:
         return None
 
     query = os.environ.get("QWEN3_TTS_SPEAK_QUERY", "").strip()
+    query = query.strip("\"'")
     if not query:
         return f"{base}/speak"
 
