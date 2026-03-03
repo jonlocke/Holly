@@ -45,6 +45,14 @@ HOSTNAME_PATTERN = re.compile(r"^(?=.{1,253}$)(?!-)[a-zA-Z0-9.-]+(?<!-)$")
 GIT_EXECUTABLE = shutil.which("git")
 
 
+def _strip_wrapping_quotes(value: str) -> str:
+    cleaned = (value or "").strip()
+    quote_pairs = {('"', '"'), ("'", "'")}
+    while len(cleaned) >= 2 and (cleaned[0], cleaned[-1]) in quote_pairs:
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
 def is_local_development() -> bool:
     env = os.environ.get("APP_ENV") or os.environ.get("FLASK_ENV") or ""
     return env.lower() in {"dev", "development", "local"}
@@ -251,7 +259,7 @@ OPENCLAW_SESSION_HEADER = (
 
 
 def _resolve_qwen_tts_endpoint_path() -> str:
-    explicit = os.environ.get("QWEN_TTS_ENDPOINT", "").strip()
+    explicit = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_ENDPOINT", ""))
     if explicit:
         return explicit if explicit.startswith("/") else f"/{explicit}"
 
@@ -261,11 +269,11 @@ def _resolve_qwen_tts_endpoint_path() -> str:
     if style in {"legacy", "text-to-speech", "text_to_speech"}:
         return "/text-to-speech"
     # quick/default: direct speak endpoint
-    return "/speak"
+    return "/speak?return_audio=true&play=false"
 
 
 def _resolve_qwen_tts_url() -> str | None:
-    base = os.environ.get("QWEN_TTS_API_BASE", "").strip().rstrip("/")
+    base = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_API_BASE", "")).rstrip("/")
     if not base:
         return None
     endpoint_path = _resolve_qwen_tts_endpoint_path()
@@ -273,17 +281,52 @@ def _resolve_qwen_tts_url() -> str | None:
 
 
 def _resolve_qwen_tts_health_url() -> str | None:
-    base = os.environ.get("QWEN_TTS_API_BASE", "").strip().rstrip("/")
+    base = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_API_BASE", "")).rstrip("/")
     if not base:
         return None
     return f"{base}/health"
 
 
 def _resolve_qwen3_tts_speak_url() -> str | None:
-    base = os.environ.get("QWEN_TTS_API_BASE", "").strip().rstrip("/")
+    base = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_API_BASE", "")).rstrip("/")
     if not base:
         return None
-    return f"{base}/speak"
+    return f"{base}/speak?return_audio=true&play=false"
+
+
+def _csp_safe_media_source_from_url(url: str) -> str | None:
+    candidate = _strip_wrapping_quotes(url)
+    if not candidate:
+        return None
+    parsed = urlparse(candidate)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in {"http", "https"}:
+        return None
+    if not parsed.netloc:
+        return None
+    return f"{scheme}://{parsed.netloc}"
+
+
+def _build_content_security_policy() -> str:
+    media_sources = ["'self'", "blob:", "data:"]
+    for upstream_url in (QWEN_TTS_URL, _resolve_qwen3_tts_speak_url()):
+        source = _csp_safe_media_source_from_url(upstream_url or "")
+        if source and source not in media_sources:
+            media_sources.append(source)
+
+    return (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        f"media-src {' '.join(media_sources)}; "
+        "font-src 'self' data:; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'"
+    )
 
 
 def _load_tts_upstream_total_timeout_seconds() -> float:
@@ -881,18 +924,7 @@ def add_security_headers(response):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; "
-        "connect-src 'self'; "
-        "font-src 'self' data:; "
-        "object-src 'none'; "
-        "base-uri 'self'; "
-        "frame-ancestors 'none'; "
-        "form-action 'self'"
-    )
+    response.headers["Content-Security-Policy"] = _build_content_security_policy()
     return response
 
 @app.route("/")
