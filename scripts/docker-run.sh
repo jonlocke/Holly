@@ -1,7 +1,8 @@
 docker run -d \
 --restart unless-stopped \
---name holly-test \
--p 5500:5000 \
+--name holly5005 \
+-p 5005:5000 \
+-e SESSION_COOKIE_SECURE=false \
 -e TTS_MODE=qwen3 \
 -e QWEN3_TTS_SPEAK_QUERY="$QWEN3_TTS_SPEAK_QUERY" \
 -e FRONTEND_TTS_AUTOPLAY=true \

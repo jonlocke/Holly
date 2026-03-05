@@ -192,6 +192,7 @@ async function speakAssistantText(text) {
     try {
         const response = await fetch("/text-to-speech", {
             method: "POST",
+            credentials: "include",
             headers: {
                 "Content-Type": "application/json",
             },
@@ -325,7 +326,7 @@ function moveHistory(direction) {
 
 async function loadQuestionHistory() {
     try {
-        const response = await fetch("/question-history");
+        const response = await fetch("/question-history", { credentials: "include" });
         if (!response.ok) return;
 
         const payload = await response.json();
@@ -439,6 +440,7 @@ async function uploadSelectedFile() {
     try {
         const response = await fetch("/upload", {
             method: "POST",
+            credentials: "include",
             body: formData,
         });
 
@@ -614,6 +616,7 @@ function streamResponse(message) {
 
     fetch("/stream", {
         method: "POST",
+        credentials: "include",
         headers: {
             "Content-Type": "application/json",
         },

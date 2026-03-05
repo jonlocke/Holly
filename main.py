@@ -58,12 +58,18 @@ def is_local_development() -> bool:
     return env.lower() in {"dev", "development", "local"}
 
 
-if not is_local_development():
-    app.config.update(
-        SESSION_COOKIE_SECURE=True,
-        SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SAMESITE="Lax",
-    )
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+app.config.update(
+    SESSION_COOKIE_SECURE=_env_bool("SESSION_COOKIE_SECURE", not is_local_development()),
+    SESSION_COOKIE_HTTPONLY=_env_bool("SESSION_COOKIE_HTTPONLY", True),
+    SESSION_COOKIE_SAMESITE=os.environ.get("SESSION_COOKIE_SAMESITE", "Lax"),
+)
 
 
 def _validate_ollama_api_base(value: str) -> bool:
