@@ -1,0 +1,19 @@
+docker run -d \
+--restart unless-stopped \
+--name holly-test \
+-p 5050:5000 \
+-e SESSION_COOKIE_SECURE=false \
+-e TTS_MODE=qwen3 \
+-e QWEN3_TTS_SPEAK_QUERY="$QWEN3_TTS_SPEAK_QUERY" \
+-e FRONTEND_TTS_AUTOPLAY=true \
+-e QWEN_TTS_TIMEOUT_SECONDS=360 \
+-e FLASK_DEBUG=1 \
+-e OLLAMA_API_BASE="$OLLAMA_API_BASE" \
+-e OLLAMA_MODEL="$OLLAMA_MODEL" \
+-e OLLAMA_BEARER_TOKEN="$OLLAMA_BEARER_TOKEN" \
+-e QWEN_TTS_API_BASE="$QWEN_TTS_API_BASE" \
+-e QWEN_TTS_ENDPOINT_STYLE=quick \
+-e QWEN_TTS_MODEL=qwen3-tts \
+-e QWEN_TTS_VOICE=ryan \
+-e QWEN_TTS_LANGUAGE=english \
+holly-ux
