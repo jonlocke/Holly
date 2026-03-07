@@ -45,6 +45,24 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         self.assertIn("Unable to process request right now.", body)
         self.assertNotIn("secret upstream details", body)
 
+    def test_session_info_marks_new_session_once(self):
+        first_response = self.client.get("/session-info")
+        self.assertEqual(first_response.status_code, 200)
+        first_payload = first_response.get_json()
+        self.assertTrue(first_payload["newSession"])
+        self.assertIn("model", first_payload)
+
+        second_response = self.client.get("/session-info")
+        self.assertEqual(second_response.status_code, 200)
+        second_payload = second_response.get_json()
+        self.assertFalse(second_payload["newSession"])
+
+    def test_chat_timeout_has_minimum_of_two_minutes(self):
+        with mock.patch.dict(os.environ, {"CHAT_REQUEST_TIMEOUT_SECONDS": "30"}, clear=False):
+            timeout = self.main._load_chat_request_timeout_seconds()
+
+        self.assertEqual(timeout, 120.0)
+
     def test_git_requires_configured_server_token(self):
         with mock.patch.object(self.main, "GIT_ENDPOINT_TOKEN", ""):
             response = self.client.post("/stream", json={"message": "/git https://example.com/repo.git"})
