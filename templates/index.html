@@ -102,46 +102,6 @@ function stopRain() {
     rainCtx.clearRect(0, 0, asciiRainCanvas.width, asciiRainCanvas.height);
 }
 
-function applyDefaultAvatarTransparency() {
-    const image = new Image();
-    image.decoding = "async";
-    image.src = "/static/holly.png";
-
-    image.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = image.naturalWidth;
-        canvas.height = image.naturalHeight;
-        const context = canvas.getContext("2d", { willReadFrequently: true });
-        if (!context) {
-            return;
-        }
-
-        context.drawImage(image, 0, 0);
-        const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-        const data = pixels.data;
-
-        for (let index = 0; index < data.length; index += 4) {
-            const red = data[index];
-            const green = data[index + 1];
-            const blue = data[index + 2];
-            const alpha = data[index + 3];
-            if (!alpha) {
-                continue;
-            }
-
-            if (red <= 22 && green <= 22 && blue <= 22) {
-                data[index + 3] = 0;
-            }
-        }
-
-        context.putImageData(pixels, 0, 0);
-        document.documentElement.style.setProperty(
-            "--holly-avatar-image",
-            `url("${canvas.toDataURL("image/png")}")`
-        );
-    };
-}
-
 function startRain() {
     if (rainInterval) {
         return;
@@ -747,7 +707,6 @@ updateInputHeight();
 updatePrediction();
 loadQuestionHistory().then(updatePrediction);
 announceSessionModel();
-applyDefaultAvatarTransparency();
 setAvatarState("smiling");
 </script>
 
