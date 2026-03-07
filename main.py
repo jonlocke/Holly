@@ -65,6 +65,31 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _load_chat_request_timeout_seconds() -> float:
+    minimum_timeout = 120.0
+    raw = os.environ.get("CHAT_REQUEST_TIMEOUT_SECONDS", str(minimum_timeout)).strip()
+
+    try:
+        configured_timeout = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid CHAT_REQUEST_TIMEOUT_SECONDS=%r; using %.1fs.",
+            raw,
+            minimum_timeout,
+        )
+        return minimum_timeout
+
+    if configured_timeout < minimum_timeout:
+        logger.warning(
+            "CHAT_REQUEST_TIMEOUT_SECONDS=%.2fs is below minimum %.1fs; using minimum.",
+            configured_timeout,
+            minimum_timeout,
+        )
+        return minimum_timeout
+
+    return configured_timeout
+
+
 app.config.update(
     SESSION_COOKIE_SECURE=_env_bool("SESSION_COOKIE_SECURE", not is_local_development()),
     SESSION_COOKIE_HTTPONLY=_env_bool("SESSION_COOKIE_HTTPONLY", True),
@@ -238,8 +263,9 @@ def load_ollama_config() -> tuple[str, str, str]:
 
 OLLAMA_API_BASE, OLLAMA_MODEL, OLLAMA_EMBED_MODEL = load_ollama_config()
 OLLAMA_BEARER_TOKEN = os.environ.get("OLLAMA_BEARER_TOKEN", "").strip()
+CHAT_REQUEST_TIMEOUT_SECONDS = _load_chat_request_timeout_seconds()
 
-_client_options = {"host": OLLAMA_API_BASE}
+_client_options = {"host": OLLAMA_API_BASE, "timeout": CHAT_REQUEST_TIMEOUT_SECONDS}
 if OLLAMA_BEARER_TOKEN:
     _client_options["headers"] = {
         "Authorization": f"Bearer {OLLAMA_BEARER_TOKEN}",
@@ -247,6 +273,10 @@ if OLLAMA_BEARER_TOKEN:
     logger.info("Using bearer token authentication for Ollama API requests.")
 
 client = Client(**_client_options)
+
+
+def _active_chat_model() -> str:
+    return OPENCLAW_AGENT_MODEL if OLLAMA_BEARER_TOKEN else OLLAMA_MODEL
 
 
 def _openai_chat_completions_url() -> str:
@@ -483,7 +513,7 @@ def _stream_chat_tokens(prompt: str, session_id: str | None = None):
         )
 
         try:
-            with urllib_request.urlopen(req, timeout=120) as response:  # nosec B310 - URL is validated by _validate_outbound_http_url.
+            with urllib_request.urlopen(req, timeout=CHAT_REQUEST_TIMEOUT_SECONDS) as response:  # nosec B310 - URL is validated by _validate_outbound_http_url.
                 for raw_line in response:
                     line = raw_line.decode("utf-8", errors="ignore").strip()
                     if not line.startswith("data:"):
@@ -939,6 +969,23 @@ def add_security_headers(response):
 @app.route("/")
 def index():
     return render_template("index.html", frontend_tts_autoplay=FRONTEND_TTS_AUTOPLAY)
+
+
+@app.route("/session-info", methods=["GET"])
+def session_info():
+    is_new_session = not session.get("session_announced", False)
+    if is_new_session:
+        session["session_announced"] = True
+
+    return (
+        jsonify(
+            {
+                "newSession": is_new_session,
+                "model": _active_chat_model(),
+            }
+        ),
+        200,
+    )
 
 
 @app.route("/health", methods=["GET"])
