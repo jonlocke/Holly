@@ -16,10 +16,15 @@
     <div class="chat-shell">
         <aside class="avatar-column" aria-label="Holly avatar">
             <button id="avatar-theme-toggle" class="avatar-theme-toggle" type="button" aria-label="Toggle theme">
-                <div id="holly-avatar" class="holly-avatar avatar-smiling" aria-hidden="true"></div>
+                <div id="holly-avatar" class="holly-avatar avatar-smiling" aria-hidden="true">
+                    <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                </div>
             </button>
         </aside>
         <div class="chat-container" id="output"></div>
+        <button id="replay-audio-btn" class="replay-audio-btn" type="button" aria-label="Replay assistant audio" title="Replay assistant audio" disabled>
+            🔊
+        </button>
     </div>
 
     <form id="chat-form" class="input-bar">
@@ -53,6 +58,7 @@ const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
 const asciiRainCanvas = document.getElementById("ascii-rain");
 const hollyAvatar = document.getElementById("holly-avatar");
+const replayAudioBtn = document.getElementById("replay-audio-btn");
 
 const rainCtx = asciiRainCanvas.getContext("2d");
 const rainChars = "アカサタナハマヤラワ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ#$%&*+-<>";
@@ -145,7 +151,103 @@ let historyCursor = -1;
 const MAX_MESSAGES = 100;
 let isStreaming = false;
 let activeSpeechAudio = null;
+let activeSpeechObjectUrl = null;
+let lastTtsCacheKey = null;
 const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
+const TTS_AUDIO_CACHE = "holly-tts-audio-v1";
+
+function hashText(value) {
+    let hash = 0;
+    for (let index = 0; index < value.length; index++) {
+        hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+    }
+    return Math.abs(hash).toString(16);
+}
+
+function getTtsCacheKey(text) {
+    return `${window.location.origin}/__tts_cache__/${hashText(text)}`;
+}
+
+async function cacheAudioBlob(text, blob, contentType) {
+    if (!("caches" in window)) {
+        return null;
+    }
+
+    const key = getTtsCacheKey(text);
+    const cache = await caches.open(TTS_AUDIO_CACHE);
+    const response = new Response(blob, {
+        headers: {
+            "Content-Type": contentType || "audio/mpeg",
+            "Cache-Control": "public, max-age=31536000",
+        },
+    });
+    await cache.put(new Request(key), response);
+    return key;
+}
+
+async function getCachedAudioBlob(key) {
+    if (!key || !("caches" in window)) {
+        return null;
+    }
+
+    const cache = await caches.open(TTS_AUDIO_CACHE);
+    const match = await cache.match(new Request(key));
+    if (!match) {
+        return null;
+    }
+    return match.blob();
+}
+
+function updateReplayButton() {
+    replayAudioBtn.disabled = !lastTtsCacheKey;
+}
+
+function setAudioPlayingIndicator(isPlaying) {
+    replayAudioBtn.classList.toggle("is-playing", isPlaying);
+}
+
+function releaseActiveSpeechObjectUrl() {
+    if (activeSpeechObjectUrl) {
+        URL.revokeObjectURL(activeSpeechObjectUrl);
+        activeSpeechObjectUrl = null;
+    }
+}
+
+async function playCachedAudio(cacheKey, fallbackText) {
+    const audioBlob = await getCachedAudioBlob(cacheKey);
+    if (!audioBlob || audioBlob.size === 0) {
+        throw new Error("Cached audio was unavailable.");
+    }
+
+    stopSpeechPlayback();
+
+    const objectUrl = URL.createObjectURL(audioBlob);
+    activeSpeechObjectUrl = objectUrl;
+    const audio = new Audio(objectUrl);
+    activeSpeechAudio = audio;
+    setAvatarState("speaking");
+    setAudioPlayingIndicator(true);
+
+    audio.onended = () => {
+        releaseActiveSpeechObjectUrl();
+        if (activeSpeechAudio === audio) {
+            activeSpeechAudio = null;
+        }
+        setAudioPlayingIndicator(false);
+        setAvatarState(input.value.length ? "waiting" : "smiling");
+    };
+    audio.onerror = () => {
+        releaseActiveSpeechObjectUrl();
+        if (activeSpeechAudio === audio) {
+            activeSpeechAudio = null;
+        }
+        setAudioPlayingIndicator(false);
+        setAvatarState(input.value.length ? "waiting" : "smiling");
+        browserSpeak(fallbackText);
+    };
+
+    await audio.play();
+}
 
 function stopSpeechPlayback() {
     if (activeSpeechAudio) {
@@ -153,6 +255,8 @@ function stopSpeechPlayback() {
         activeSpeechAudio.src = "";
         activeSpeechAudio = null;
     }
+    releaseActiveSpeechObjectUrl();
+    setAudioPlayingIndicator(false);
 
     if ("speechSynthesis" in window) {
         window.speechSynthesis.cancel();
@@ -173,6 +277,14 @@ function browserSpeak(text) {
     const utterance = new SpeechSynthesisUtterance(safeText);
     utterance.rate = 1;
     utterance.pitch = 1;
+    utterance.onstart = () => {
+        setAudioPlayingIndicator(true);
+        setAvatarState("speaking");
+    };
+    utterance.onend = () => {
+        setAudioPlayingIndicator(false);
+        setAvatarState(input.value.length ? "waiting" : "smiling");
+    };
     window.speechSynthesis.speak(utterance);
 }
 
@@ -219,24 +331,9 @@ async function speakAssistantText(text) {
             throw new Error("Empty audio payload from TTS endpoint.");
         }
 
-        const objectUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio(objectUrl);
-        activeSpeechAudio = audio;
-        audio.onended = () => {
-            URL.revokeObjectURL(objectUrl);
-            if (activeSpeechAudio === audio) {
-                activeSpeechAudio = null;
-            }
-        };
-        audio.onerror = () => {
-            URL.revokeObjectURL(objectUrl);
-            if (activeSpeechAudio === audio) {
-                activeSpeechAudio = null;
-            }
-            browserSpeak(safeText);
-        };
-
-        await audio.play();
+        lastTtsCacheKey = await cacheAudioBlob(safeText, audioBlob, contentType);
+        updateReplayButton();
+        await playCachedAudio(lastTtsCacheKey, safeText);
     } catch (error) {
         console.warn("TTS playback failed, using browser speech fallback.", error);
         browserSpeak(safeText);
@@ -244,9 +341,21 @@ async function speakAssistantText(text) {
 }
 
 function setAvatarState(state) {
-    hollyAvatar.classList.remove("avatar-waiting", "avatar-thinking", "avatar-smiling");
+    hollyAvatar.classList.remove("avatar-waiting", "avatar-thinking", "avatar-smiling", "avatar-speaking");
     hollyAvatar.classList.add(`avatar-${state}`);
 }
+
+replayAudioBtn.addEventListener("click", async () => {
+    if (!lastTtsCacheKey) {
+        return;
+    }
+
+    try {
+        await playCachedAudio(lastTtsCacheKey);
+    } catch (error) {
+        console.warn("Replay from browser cache failed.", error);
+    }
+});
 
 /* ---------------- Scroll Lock ---------------- */
 
@@ -594,6 +703,7 @@ function streamResponse(message) {
             }
 
             textNode.nodeValue += data.content;
+            setAvatarState("speaking");
             safeScroll();
         }
 
@@ -708,6 +818,7 @@ updatePrediction();
 loadQuestionHistory().then(updatePrediction);
 announceSessionModel();
 setAvatarState("smiling");
+updateReplayButton();
 </script>
 
 </body>
