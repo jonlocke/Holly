@@ -1,9 +1,9 @@
 import importlib
 import os
-import time
 import unittest
 from unittest import mock
 from urllib import error as urllib_error
+import socket
 
 
 class _FakeHTTPResponse:
@@ -12,24 +12,23 @@ class _FakeHTTPResponse:
         self.status = status
         self.headers = {"Content-Type": content_type}
 
-    def read(self):
-        return self._body
+    def read(self, amt=-1):
+        if amt is None or amt < 0:
+            chunk = self._body
+            self._body = b""
+            return chunk
+        chunk = self._body[:amt]
+        self._body = self._body[amt:]
+        return chunk
+
+    def close(self):
+        return None
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
         return False
-
-
-class _SlowHTTPResponse(_FakeHTTPResponse):
-    def __init__(self, delay_seconds, body=b"", status=200, content_type="application/octet-stream"):
-        super().__init__(body=body, status=status, content_type=content_type)
-        self.delay_seconds = delay_seconds
-
-    def read(self):
-        time.sleep(self.delay_seconds)
-        return super().read()
 
 
 class Qwen3TTSFallbackTests(unittest.TestCase):
@@ -91,7 +90,7 @@ class Qwen3TTSFallbackTests(unittest.TestCase):
         self.assertEqual(mocked_urlopen.call_count, 1)
         self.assertEqual(mocked_urlopen.call_args[0][0].full_url, health_url)
 
-    def test_qwen3_slow_speak_uses_timeout_fallback(self):
+    def test_qwen3_timeout_from_upstream_forces_fallback(self):
         health_url = "http://tts.internal/health"
         speak_url = "http://tts.internal/speak"
 
@@ -99,14 +98,13 @@ class Qwen3TTSFallbackTests(unittest.TestCase):
             if req.full_url == health_url and req.get_method() == "GET":
                 return _FakeHTTPResponse(body=b'{"status":"ok"}', status=200, content_type="application/json")
             if req.full_url == speak_url and req.get_method() == "POST":
-                return _SlowHTTPResponse(delay_seconds=0.2, body=b"slow-audio", status=200, content_type="audio/mpeg")
+                raise socket.timeout("timed out")
             raise AssertionError(f"Unexpected upstream call to {req.full_url} ({req.get_method()})")
 
         with (
             mock.patch.object(self.main, "TTS_MODE", "qwen3"),
             mock.patch.object(self.main, "QWEN_TTS_HEALTH_URL", health_url),
             mock.patch.object(self.main, "_resolve_qwen3_tts_speak_url", return_value=speak_url),
-            mock.patch.object(self.main, "TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS", 0.05),
             mock.patch.object(self.main.urllib_request, "urlopen", side_effect=fake_urlopen) as mocked_urlopen,
         ):
             response = self.client.post("/text-to-speech", json={"text": "Fallback on timeout"})
@@ -116,8 +114,40 @@ class Qwen3TTSFallbackTests(unittest.TestCase):
         self.assertEqual(payload["fallback"], "browser_speak")
         self.assertEqual(payload["text"], "Fallback on timeout")
         self.assertIn("Unable to reach TTS backend", payload["reason"])
-        self.assertIn("total timeout", payload["reason"])
+        self.assertIn("timed out", payload["reason"])
         self.assertEqual(mocked_urlopen.call_count, 2)
+
+    def test_qwen3_stream_mode_uses_stream_endpoint(self):
+        health_url = "http://tts.internal/health"
+        speak_url = "http://tts.internal/speak"
+        stream_url = "http://tts.internal/speak?stream_audio_chunks=1&play=0&chunk=1&paragraph_chunking=1"
+
+        def fake_urlopen(req, timeout=0):
+            if req.full_url == health_url and req.get_method() == "GET":
+                return _FakeHTTPResponse(body=b'{"status":"ok"}', status=200, content_type="application/json")
+            if req.full_url == stream_url and req.get_method() == "POST":
+                return _FakeHTTPResponse(
+                    body=b'{"type":"audio_chunk","audio_b64_wav":"QQ=="}\n',
+                    status=200,
+                    content_type="application/x-ndjson",
+                )
+            raise AssertionError(f"Unexpected upstream call to {req.full_url} ({req.get_method()})")
+
+        with (
+            mock.patch.object(self.main, "TTS_MODE", "qwen3"),
+            mock.patch.object(self.main, "QWEN_TTS_HEALTH_URL", health_url),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_speak_url", return_value=speak_url),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_stream_url", return_value=stream_url),
+            mock.patch.object(self.main.urllib_request, "urlopen", side_effect=fake_urlopen) as mocked_urlopen,
+        ):
+            response = self.client.post("/text-to-speech?stream=1", json={"text": "Stream me"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("application/x-ndjson", response.content_type)
+        self.assertEqual(response.data, b'{"type":"audio_chunk","audio_b64_wav":"QQ=="}\n')
+        self.assertEqual(mocked_urlopen.call_count, 2)
+        called_urls = [call.args[0].full_url for call in mocked_urlopen.call_args_list]
+        self.assertEqual(called_urls, [health_url, stream_url])
 
 
 if __name__ == "__main__":
