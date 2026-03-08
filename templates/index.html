@@ -147,7 +147,58 @@ let isStreaming = false;
 let activeSpeechAudio = null;
 let activeSpeechQueue = [];
 let activeSpeechPlaybackToken = 0;
-const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
+
+function createAudioChunksCache(chunks) {
+    return chunks.map((chunk) => new Uint8Array(chunk));
+}
+
+function setSpeakerState(button, state) {
+    button.classList.remove("speaker-loading", "speaker-ready", "speaker-error");
+    button.classList.add(`speaker-${state}`);
+    button.disabled = state !== "ready";
+    button.setAttribute("aria-busy", state === "loading" ? "true" : "false");
+
+    if (state === "loading") {
+        button.title = "Preparing audio...";
+    } else if (state === "ready") {
+        button.title = "Play cached audio";
+    } else {
+        button.title = "Audio unavailable";
+    }
+}
+
+function playCachedAudio(chunks) {
+    if (!chunks || !chunks.length) {
+        return;
+    }
+
+    stopSpeechPlayback();
+    const playbackToken = activeSpeechPlaybackToken;
+
+    for (const chunk of chunks) {
+        enqueueAudioChunkForPlayback(chunk, playbackToken);
+    }
+}
+
+function createSpeakerButton() {
+    const button = document.createElement("button");
+    button.className = "speaker-indicator speaker-loading";
+    button.type = "button";
+    button.textContent = "🔊";
+    button.setAttribute("aria-label", "Response audio");
+    button.dataset.audioReady = "false";
+    setSpeakerState(button, "loading");
+
+    button.addEventListener("click", () => {
+        const rawChunks = button.__audioChunks;
+        if (!rawChunks || !rawChunks.length) {
+            return;
+        }
+        playCachedAudio(rawChunks);
+    });
+
+    return button;
+}
 
 function stopSpeechPlayback() {
     activeSpeechPlaybackToken += 1;
@@ -226,7 +277,7 @@ function enqueueAudioChunkForPlayback(wavBytes, playbackToken) {
     pumpQueue();
 }
 
-async function playStreamedTTS(text) {
+async function cacheStreamedTTS(text, speakerButton) {
     const response = await fetch("/text-to-speech?stream=1", {
         method: "POST",
         credentials: "include",
@@ -244,7 +295,7 @@ async function playStreamedTTS(text) {
     if (contentType.includes("application/json")) {
         const payload = await response.json();
         if (payload?.fallback === "browser_speak") {
-            browserSpeak(payload?.text || text);
+            setSpeakerState(speakerButton, "error");
             return;
         }
         throw new Error(payload?.error || "Unexpected JSON response from streamed TTS endpoint.");
@@ -254,19 +305,15 @@ async function playStreamedTTS(text) {
         throw new Error("Streamed TTS response body is unavailable.");
     }
 
-    const playbackToken = activeSpeechPlaybackToken;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    const chunks = [];
     let buffer = "";
 
     while (true) {
         const { done, value } = await reader.read();
         if (done) {
             break;
-        }
-
-        if (playbackToken !== activeSpeechPlaybackToken) {
-            return;
         }
 
         buffer += decoder.decode(value, { stream: true });
@@ -281,7 +328,7 @@ async function playStreamedTTS(text) {
                 if (msg.type === "audio_chunk" && msg.audio_b64_wav) {
                     const raw = atob(msg.audio_b64_wav);
                     const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
-                    enqueueAudioChunkForPlayback(bytes, playbackToken);
+                    chunks.push(bytes);
                 } else if (msg.type === "error") {
                     throw new Error(msg.detail || "Unknown streamed TTS error.");
                 }
@@ -290,26 +337,28 @@ async function playStreamedTTS(text) {
             newlineIndex = buffer.indexOf("\n");
         }
     }
+
+    if (!chunks.length) {
+        throw new Error("No audio chunks were returned by the TTS stream.");
+    }
+
+    speakerButton.__audioChunks = createAudioChunksCache(chunks);
+    speakerButton.dataset.audioReady = "true";
+    setSpeakerState(speakerButton, "ready");
 }
 
-async function speakAssistantText(text) {
+async function cacheAssistantAudio(text, speakerButton) {
     const safeText = (text || "").trim();
     if (!safeText) {
+        setSpeakerState(speakerButton, "error");
         return;
     }
-
-    if (!FRONTEND_TTS_AUTOPLAY) {
-        console.info("Frontend TTS autoplay disabled; skipping browser playback.");
-        return;
-    }
-
-    stopSpeechPlayback();
 
     try {
-        await playStreamedTTS(safeText);
+        await cacheStreamedTTS(safeText, speakerButton);
     } catch (error) {
-        console.warn("Streamed TTS playback failed, using browser speech fallback.", error);
-        browserSpeak(safeText);
+        console.warn("Unable to cache streamed TTS audio.", error);
+        setSpeakerState(speakerButton, "error");
     }
 }
 
@@ -612,6 +661,7 @@ function streamResponse(message) {
 
     const bubble = document.createElement("div");
     bubble.className = "bubble";
+    const speakerButton = createSpeakerButton();
 
     // Typing indicator
     bubble.innerHTML = `
@@ -683,13 +733,14 @@ function streamResponse(message) {
             const parsedHtml = marked.parse(assistantText);
             const sanitizedHtml = DOMPurify.sanitize(parsedHtml, SANITIZE_CONFIG);
             bubble.innerHTML = sanitizedHtml;
+            bubble.appendChild(speakerButton);
 
             input.disabled = false;
             input.focus();
             stopBtn.disabled = true;
             setAvatarState("smiling");
 
-            speakAssistantText(assistantText);
+            cacheAssistantAudio(assistantText, speakerButton);
             resetUi();
         }
 
