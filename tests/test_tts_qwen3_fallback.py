@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import unittest
 from unittest import mock
@@ -161,6 +162,40 @@ class Qwen3TTSFallbackTests(unittest.TestCase):
         self.assertEqual(mocked_urlopen.call_count, 2)
         called_urls = [call.args[0].full_url for call in mocked_urlopen.call_args_list]
         self.assertEqual(called_urls, [health_url, stream_url])
+
+    def test_qwen3_stream_mode_splits_text_server_side_into_multiple_upstream_calls(self):
+        health_url = "http://tts.internal/health"
+        speak_url = "http://tts.internal/speak"
+        stream_url = "http://tts.internal/speak?stream_audio_chunks=1&play=0&chunk=1&paragraph_chunking=1"
+        post_texts = []
+
+        def fake_urlopen(req, timeout=0):
+            if req.full_url == health_url and req.get_method() == "GET":
+                return _FakeHTTPResponse(body=b'{"status":"ok"}', status=200, content_type="application/json")
+            if req.full_url == stream_url and req.get_method() == "POST":
+                payload = json.loads(req.data.decode("utf-8"))
+                post_texts.append(payload.get("text", ""))
+                return _FakeHTTPResponse(
+                    body=b'{"type":"audio_chunk","audio_b64_wav":"QQ=="}\n',
+                    status=200,
+                    content_type="application/x-ndjson",
+                )
+            raise AssertionError(f"Unexpected upstream call to {req.full_url} ({req.get_method()})")
+
+        with (
+            mock.patch.object(self.main, "TTS_MODE", "qwen3"),
+            mock.patch.object(self.main, "QWEN_TTS_HEALTH_URL", health_url),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_speak_url", return_value=speak_url),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_stream_url", return_value=stream_url),
+            mock.patch.object(self.main, "_prepare_streamed_tts_chunks", return_value=["chunk one", "chunk two"]),
+            mock.patch.object(self.main.urllib_request, "urlopen", side_effect=fake_urlopen) as mocked_urlopen,
+        ):
+            response = self.client.post("/text-to-speech?stream=1", json={"text": "Long text"}, buffered=True)
+
+        self.assertEqual(response.status_code, 200)
+        _ = response.data
+        self.assertEqual(post_texts, ["chunk one", "chunk two"])
+        self.assertEqual(mocked_urlopen.call_count, 3)
 
 
 if __name__ == "__main__":

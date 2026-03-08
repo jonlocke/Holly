@@ -436,6 +436,13 @@ def _prepare_text_for_streamed_tts(text: str, max_chars: int = TTS_STREAM_CHUNK_
     return "\n\n".join(chunk for chunk in prepared_chunks if chunk)
 
 
+def _prepare_streamed_tts_chunks(text: str, max_chars: int = TTS_STREAM_CHUNK_TARGET_CHARS) -> list[str]:
+    prepared = _prepare_text_for_streamed_tts(text, max_chars=max_chars)
+    if not prepared:
+        return []
+    return [chunk.strip() for chunk in prepared.split("\n\n") if chunk.strip()]
+
+
 def _csp_safe_media_source_from_url(url: str) -> str | None:
     candidate = _strip_wrapping_quotes(url)
     if not candidate:
@@ -1204,6 +1211,7 @@ def text_to_speech_proxy():
         ).strip()
 
     stream_mode_requested = request.args.get("stream") == "1"
+    stream_text_chunks: list[str] = []
 
     if stream_mode_requested and isinstance(payload, dict):
         stream_text = str(
@@ -1213,7 +1221,9 @@ def text_to_speech_proxy():
             or ""
         ).strip()
         if stream_text:
-            payload["text"] = _prepare_text_for_streamed_tts(stream_text)
+            stream_text_chunks = _prepare_streamed_tts_chunks(stream_text, max_chars=TTS_STREAM_CHUNK_TARGET_CHARS)
+            if stream_text_chunks:
+                payload["text"] = stream_text_chunks[0]
 
     if TTS_MODE == "qwen3":
         qwen3_tts_speak_url = _resolve_qwen3_tts_speak_url()
@@ -1253,6 +1263,44 @@ def text_to_speech_proxy():
 
     logger.info("Forwarding TTS request to %s", safe_url)
 
+    if stream_mode_requested:
+        chunk_payloads = stream_text_chunks or [fallback_text]
+
+        def _stream_upstream_response():
+            for chunk_text in chunk_payloads:
+                chunk_request_payload = dict(payload) if isinstance(payload, dict) else {}
+                chunk_request_payload["text"] = chunk_text
+                req = urllib_request.Request(
+                    safe_url,
+                    data=json.dumps(chunk_request_payload).encode("utf-8"),
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                try:
+                    upstream = urllib_request.urlopen(req, timeout=TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS)  # nosec B310 - URL is validated by _validate_outbound_http_url.
+                    try:
+                        while True:
+                            line = upstream.readline()
+                            if not line:
+                                break
+                            yield line
+                    finally:
+                        upstream.close()
+                except Exception as exc:
+                    error_line = json.dumps({"type": "error", "detail": f"Unable to reach TTS backend: {exc}"}) + "\n"
+                    yield error_line.encode("utf-8")
+                    return
+
+        return Response(
+            _stream_upstream_response(),
+            status=200,
+            content_type="application/x-ndjson",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     req = urllib_request.Request(
         safe_url,
         data=json.dumps(payload).encode("utf-8"),
@@ -1262,27 +1310,6 @@ def text_to_speech_proxy():
 
     try:
         upstream = urllib_request.urlopen(req, timeout=TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS)  # nosec B310 - URL is validated by _validate_outbound_http_url.
-
-        if stream_mode_requested:
-            def _stream_upstream_response():
-                try:
-                    while True:
-                        line = upstream.readline()
-                        if not line:
-                            break
-                        yield line
-                finally:
-                    upstream.close()
-
-            return Response(
-                _stream_upstream_response(),
-                status=upstream.status,
-                content_type=upstream.headers.get("Content-Type", "application/x-ndjson"),
-                headers={
-                    "Cache-Control": "no-cache",
-                    "X-Accel-Buffering": "no",
-                },
-            )
 
         body = upstream.read()
         content_type = upstream.headers.get("Content-Type", "application/octet-stream")
