@@ -13,7 +13,6 @@ import time
 import ipaddress
 import re
 import socket
-import queue
 from urllib.parse import urlparse
 from urllib import request as urllib_request
 from urllib import error as urllib_error
@@ -331,6 +330,13 @@ def _resolve_qwen3_tts_speak_url() -> str | None:
     if not base:
         return None
     return f"{base}/speak?return_audio=true&play=false"
+
+
+def _resolve_qwen3_tts_stream_url() -> str | None:
+    base = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_API_BASE", "")).rstrip("/")
+    if not base:
+        return None
+    return f"{base}/speak?stream_audio_chunks=1&play=0&chunk=1&paragraph_chunking=1"
 
 
 def _csp_safe_media_source_from_url(url: str) -> str | None:
@@ -1100,8 +1106,11 @@ def text_to_speech_proxy():
             or ""
         ).strip()
 
+    stream_mode_requested = request.args.get("stream") == "1"
+
     if TTS_MODE == "qwen3":
         qwen3_tts_speak_url = _resolve_qwen3_tts_speak_url()
+        qwen3_tts_stream_url = _resolve_qwen3_tts_stream_url()
 
         if not QWEN_TTS_HEALTH_URL or not qwen3_tts_speak_url:
             return jsonify({"error": "QWEN_TTS_API_BASE is not configured."}), 503
@@ -1121,7 +1130,9 @@ def text_to_speech_proxy():
                 }
             ), 200
 
-        target_tts_url = qwen3_tts_speak_url
+        if stream_mode_requested and not qwen3_tts_stream_url:
+            return jsonify({"error": "QWEN_TTS_API_BASE is not configured."}), 503
+        target_tts_url = qwen3_tts_stream_url if stream_mode_requested else qwen3_tts_speak_url
     else:
         if not QWEN_TTS_URL:
             return jsonify({"error": "QWEN_TTS_API_BASE is not configured."}), 503
@@ -1142,41 +1153,30 @@ def text_to_speech_proxy():
         headers={"Content-Type": "application/json"},
     )
 
-    def _urlopen_and_read_with_deadline() -> tuple[bytes, int, str]:
-        result_queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
-
-        def _worker() -> None:
-            try:
-                with urllib_request.urlopen(req, timeout=TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS) as upstream:  # nosec B310 - URL is validated by _validate_outbound_http_url.
-                    body = upstream.read()
-                    content_type = upstream.headers.get("Content-Type", "application/octet-stream")
-                    result_queue.put(("ok", (body, upstream.status, content_type)))
-            except Exception as exc:
-                result_queue.put(("error", exc))
-
-        thread = threading.Thread(target=_worker, daemon=True)
-        thread.start()
-
-        try:
-            kind, value = result_queue.get(timeout=TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS)
-        except queue.Empty as exc:
-            raise TimeoutError(
-                f"TTS upstream exceeded total timeout of {TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS:.2f}s"
-            ) from exc
-
-        if kind == "error":
-            if isinstance(value, Exception):
-                raise value
-            raise RuntimeError(f"Unexpected upstream error payload type: {type(value)!r}")
-
-        if not isinstance(value, tuple) or len(value) != 3:
-            raise RuntimeError("Unexpected upstream success payload shape.")
-        body, status, content_type = value
-        return body, status, content_type
-
     try:
-        body, status, content_type = _urlopen_and_read_with_deadline()
-        return Response(body, status=status, content_type=content_type)
+        upstream = urllib_request.urlopen(req, timeout=TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS)  # nosec B310 - URL is validated by _validate_outbound_http_url.
+
+        if stream_mode_requested:
+            def _stream_upstream_response():
+                try:
+                    while True:
+                        chunk = upstream.read(4096)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    upstream.close()
+
+            return Response(
+                _stream_upstream_response(),
+                status=upstream.status,
+                content_type=upstream.headers.get("Content-Type", "text/plain"),
+            )
+
+        body = upstream.read()
+        content_type = upstream.headers.get("Content-Type", "application/octet-stream")
+        upstream.close()
+        return Response(body, status=upstream.status, content_type=content_type)
     except urllib_error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="ignore")
         logger.warning("QWEN TTS upstream error: %s %s", exc.code, error_body)
