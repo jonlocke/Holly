@@ -42,6 +42,34 @@ class HealthEndpointTests(unittest.TestCase):
             "https://example.com",
         )
 
+
+    def test_streamed_tts_prefers_paragraph_bullet_and_240ish_sentence_chunks(self):
+        module = importlib.import_module("main")
+        text = (
+            "Short paragraph that should stay together.\n\n"
+            "1. First numbered bullet sentence is substantial and should combine with the second sentence when still under the size target. "
+            "Second sentence keeps it under the optimal boundary for one chunk.\n\n"
+            "This final paragraph sentence is intentionally long enough that it needs to be split across multiple chunks because it keeps going "
+            "with additional detail and still more detail so that the total character length exceeds the configured target size by a fair amount."
+        )
+
+        prepared = module._prepare_text_for_streamed_tts(text, max_chars=120)
+        chunks = [chunk for chunk in prepared.split("\n\n") if chunk]
+
+        self.assertGreaterEqual(len(chunks), 4)
+        self.assertEqual(chunks[0], "Short paragraph that should stay together.")
+        self.assertTrue(chunks[1].startswith("1. First numbered bullet"))
+        self.assertLessEqual(len(chunks[1]), 120)
+        self.assertTrue(all(len(chunk) <= 120 for chunk in chunks[1:]))
+
+    def test_streamed_tts_combines_sentences_when_under_target(self):
+        module = importlib.import_module("main")
+        text = "Sentence one is short. Sentence two is short as well."
+
+        prepared = module._prepare_text_for_streamed_tts(text, max_chars=240)
+
+        self.assertEqual(prepared, text)
+
     def test_qwen_tts_resolver_strips_wrapping_quotes(self):
         module = importlib.import_module("main")
         with unittest.mock.patch.dict(
