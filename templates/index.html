@@ -147,6 +147,7 @@ let isStreaming = false;
 let activeSpeechAudio = null;
 let activeSpeechQueue = [];
 let activeSpeechPlaybackToken = 0;
+const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
 
 function createAudioChunksCache(chunks) {
     return chunks.map((chunk) => new Uint8Array(chunk));
@@ -277,7 +278,7 @@ function enqueueAudioChunkForPlayback(wavBytes, playbackToken) {
     pumpQueue();
 }
 
-async function cacheStreamedTTS(text, speakerButton) {
+async function cacheStreamedTTS(text, speakerButton, shouldAutoplay) {
     const response = await fetch("/text-to-speech?stream=1", {
         method: "POST",
         credentials: "include",
@@ -296,6 +297,9 @@ async function cacheStreamedTTS(text, speakerButton) {
         const payload = await response.json();
         if (payload?.fallback === "browser_speak") {
             setSpeakerState(speakerButton, "error");
+            if (shouldAutoplay) {
+                browserSpeak(payload?.text || text);
+            }
             return;
         }
         throw new Error(payload?.error || "Unexpected JSON response from streamed TTS endpoint.");
@@ -305,6 +309,11 @@ async function cacheStreamedTTS(text, speakerButton) {
         throw new Error("Streamed TTS response body is unavailable.");
     }
 
+    if (shouldAutoplay) {
+        stopSpeechPlayback();
+    }
+
+    const playbackToken = activeSpeechPlaybackToken;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     const chunks = [];
@@ -314,6 +323,10 @@ async function cacheStreamedTTS(text, speakerButton) {
         const { done, value } = await reader.read();
         if (done) {
             break;
+        }
+
+        if (shouldAutoplay && playbackToken !== activeSpeechPlaybackToken) {
+            return;
         }
 
         buffer += decoder.decode(value, { stream: true });
@@ -329,6 +342,10 @@ async function cacheStreamedTTS(text, speakerButton) {
                     const raw = atob(msg.audio_b64_wav);
                     const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
                     chunks.push(bytes);
+
+                    if (shouldAutoplay) {
+                        enqueueAudioChunkForPlayback(bytes, playbackToken);
+                    }
                 } else if (msg.type === "error") {
                     throw new Error(msg.detail || "Unknown streamed TTS error.");
                 }
@@ -355,10 +372,13 @@ async function cacheAssistantAudio(text, speakerButton) {
     }
 
     try {
-        await cacheStreamedTTS(safeText, speakerButton);
+        await cacheStreamedTTS(safeText, speakerButton, FRONTEND_TTS_AUTOPLAY);
     } catch (error) {
         console.warn("Unable to cache streamed TTS audio.", error);
         setSpeakerState(speakerButton, "error");
+        if (FRONTEND_TTS_AUTOPLAY) {
+            browserSpeak(safeText);
+        }
     }
 }
 
