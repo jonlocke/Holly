@@ -339,6 +339,103 @@ def _resolve_qwen3_tts_stream_url() -> str | None:
     return f"{base}/speak?stream_audio_chunks=1&play=0&chunk=1&paragraph_chunking=1"
 
 
+
+TTS_STREAM_CHUNK_TARGET_CHARS = 240
+_BULLET_PREFIX_PATTERN = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
+_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?])\s+")
+
+
+def _is_bullet_line(text: str) -> bool:
+    return bool(_BULLET_PREFIX_PATTERN.match((text or "").strip()))
+
+
+def _split_long_text_for_tts(text: str, max_chars: int, preserve_sentences: bool = True) -> list[str]:
+    if not text:
+        return []
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if not normalized:
+        return []
+
+    if preserve_sentences:
+        segments = [part.strip() for part in _SENTENCE_SPLIT_PATTERN.split(normalized) if part.strip()]
+    else:
+        segments = [normalized]
+
+    if not segments:
+        return [normalized]
+
+    chunks: list[str] = []
+    current = ""
+
+    for segment in segments:
+        candidate = segment if not current else f"{current} {segment}"
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current)
+            current = ""
+
+        if len(segment) <= max_chars:
+            current = segment
+            continue
+
+        words = segment.split(" ")
+        word_chunk = ""
+        for word in words:
+            candidate_word_chunk = word if not word_chunk else f"{word_chunk} {word}"
+            if len(candidate_word_chunk) <= max_chars:
+                word_chunk = candidate_word_chunk
+                continue
+
+            if word_chunk:
+                chunks.append(word_chunk)
+                word_chunk = ""
+
+            if len(word) <= max_chars:
+                word_chunk = word
+                continue
+
+            start = 0
+            while start < len(word):
+                end = min(start + max_chars, len(word))
+                chunks.append(word[start:end].strip())
+                start = end
+
+        if word_chunk:
+            current = word_chunk
+
+    if current:
+        chunks.append(current)
+
+    return [chunk for chunk in chunks if chunk]
+
+
+def _prepare_text_for_streamed_tts(text: str, max_chars: int = TTS_STREAM_CHUNK_TARGET_CHARS) -> str:
+    if not text:
+        return ""
+
+    sections = [section.strip() for section in re.split(r"\n\s*\n+", text) if section.strip()]
+    if not sections:
+        return ""
+
+    prepared_chunks: list[str] = []
+    for section in sections:
+        if _is_bullet_line(section):
+            prepared_chunks.extend(_split_long_text_for_tts(section, max_chars, preserve_sentences=False))
+            continue
+
+        collapsed = re.sub(r"\s+", " ", section).strip()
+        if len(collapsed) <= max_chars:
+            prepared_chunks.append(collapsed)
+            continue
+
+        prepared_chunks.extend(_split_long_text_for_tts(section, max_chars))
+
+    return "\n\n".join(chunk for chunk in prepared_chunks if chunk)
+
+
 def _csp_safe_media_source_from_url(url: str) -> str | None:
     candidate = _strip_wrapping_quotes(url)
     if not candidate:
@@ -1107,6 +1204,16 @@ def text_to_speech_proxy():
         ).strip()
 
     stream_mode_requested = request.args.get("stream") == "1"
+
+    if stream_mode_requested and isinstance(payload, dict):
+        stream_text = str(
+            payload.get("text")
+            or payload.get("input")
+            or payload.get("message")
+            or ""
+        ).strip()
+        if stream_text:
+            payload["text"] = _prepare_text_for_streamed_tts(stream_text)
 
     if TTS_MODE == "qwen3":
         qwen3_tts_speak_url = _resolve_qwen3_tts_speak_url()
