@@ -1160,17 +1160,21 @@ def text_to_speech_proxy():
             def _stream_upstream_response():
                 try:
                     while True:
-                        chunk = upstream.read(4096)
-                        if not chunk:
+                        line = upstream.readline()
+                        if not line:
                             break
-                        yield chunk
+                        yield line
                 finally:
                     upstream.close()
 
             return Response(
                 _stream_upstream_response(),
                 status=upstream.status,
-                content_type=upstream.headers.get("Content-Type", "text/plain"),
+                content_type=upstream.headers.get("Content-Type", "application/x-ndjson"),
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
             )
 
         body = upstream.read()

@@ -21,6 +21,19 @@ class _FakeHTTPResponse:
         self._body = self._body[amt:]
         return chunk
 
+    def readline(self, limit=-1):
+        if not self._body:
+            return b""
+        newline_index = self._body.find(b"\n")
+        if newline_index == -1:
+            return self.read(limit)
+        end_index = newline_index + 1
+        if limit is not None and limit >= 0:
+            end_index = min(end_index, limit)
+        line = self._body[:end_index]
+        self._body = self._body[end_index:]
+        return line
+
     def close(self):
         return None
 
