@@ -168,12 +168,12 @@ textarea:focus-visible {
     width: 144px;
     height: 120px;
     display: flex;
-    align-items: flex-end;
+    align-items: flex-start;
     justify-content: center;
     gap: 8px;
     padding: 8px;
     box-sizing: border-box;
-    transform: translateX(6%);
+    transform: translateX(6%) rotateX(180deg);
 }
 
 .holly-avatar span {
@@ -182,7 +182,7 @@ textarea:focus-visible {
     border-radius: 10px;
     background: linear-gradient(180deg, #38bdf8 0%, #2563eb 100%);
     box-shadow: 0 0 10px rgba(37, 99, 235, 0.22);
-    transform-origin: bottom;
+    transform-origin: top;
     transition: transform 0.2s ease, opacity 0.2s ease;
 }
 
