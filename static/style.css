@@ -231,6 +231,43 @@ textarea:focus-visible {
     color: #222;
 }
 
+
+.assistant .bubble {
+    position: relative;
+    padding-bottom: 30px;
+}
+
+.speaker-indicator {
+    position: absolute;
+    right: 10px;
+    bottom: 8px;
+    border: none;
+    background: transparent;
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px;
+    opacity: 0.55;
+    cursor: default;
+}
+
+.speaker-indicator.speaker-loading {
+    color: #6b7280;
+}
+
+.speaker-indicator.speaker-ready {
+    color: #16a34a;
+    opacity: 1;
+    cursor: pointer;
+}
+
+.speaker-indicator.speaker-error {
+    color: #9ca3af;
+}
+
+.speaker-indicator:disabled {
+    pointer-events: none;
+}
+
 /* ---------- Input Bar ---------- */
 
 .input-bar {

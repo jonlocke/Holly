@@ -148,6 +148,82 @@ let activeSpeechAudio = null;
 let activeSpeechQueue = [];
 let activeSpeechPlaybackToken = 0;
 const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
+const PROCESSING_WORD_THRESHOLD = 7;
+const speechCueCache = {
+    processing: null,
+    processingComplete: null,
+};
+let pendingProcessingPlaybackToken = null;
+
+function countWords(text) {
+    const safeText = (text || "").trim();
+    if (!safeText) {
+        return 0;
+    }
+    return safeText.split(/\s+/).length;
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createAudioChunksCache(chunks) {
+    return chunks.map((chunk) => new Uint8Array(chunk));
+}
+
+function setSpeakerState(button, state) {
+    button.classList.remove("speaker-loading", "speaker-ready", "speaker-error");
+    button.classList.add(`speaker-${state}`);
+    button.disabled = state !== "ready";
+    button.setAttribute("aria-busy", state === "loading" ? "true" : "false");
+
+    if (state === "loading") {
+        button.title = "Preparing audio...";
+    } else if (state === "ready") {
+        button.title = "Play cached audio";
+    } else {
+        button.title = "Audio unavailable";
+    }
+}
+
+function queueAudioChunksForPlayback(chunks, playbackToken) {
+    if (!chunks || !chunks.length) {
+        return;
+    }
+
+    for (const chunk of chunks) {
+        enqueueAudioChunkForPlayback(chunk, playbackToken);
+    }
+}
+
+function playCachedAudio(chunks) {
+    if (!chunks || !chunks.length) {
+        return;
+    }
+
+    stopSpeechPlayback();
+    queueAudioChunksForPlayback(chunks, activeSpeechPlaybackToken);
+}
+
+function createSpeakerButton() {
+    const button = document.createElement("button");
+    button.className = "speaker-indicator speaker-loading";
+    button.type = "button";
+    button.textContent = "🔊";
+    button.setAttribute("aria-label", "Response audio");
+    button.dataset.audioReady = "false";
+    setSpeakerState(button, "loading");
+
+    button.addEventListener("click", () => {
+        const rawChunks = button.__audioChunks;
+        if (!rawChunks || !rawChunks.length) {
+            return;
+        }
+        playCachedAudio(rawChunks);
+    });
+
+    return button;
+}
 
 function stopSpeechPlayback() {
     activeSpeechPlaybackToken += 1;
@@ -226,7 +302,132 @@ function enqueueAudioChunkForPlayback(wavBytes, playbackToken) {
     pumpQueue();
 }
 
-async function playStreamedTTS(text) {
+async function waitForSpeechQueueToDrain(playbackToken, timeoutMs = 15000) {
+    const startedAt = Date.now();
+
+    while (playbackToken === activeSpeechPlaybackToken) {
+        if (!activeSpeechAudio && activeSpeechQueue.length === 0) {
+            return;
+        }
+
+        if (Date.now() - startedAt > timeoutMs) {
+            return;
+        }
+
+        await sleep(50);
+    }
+}
+
+async function fetchTTSChunks(text) {
+    const response = await fetch("/text-to-speech?stream=1", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text }),
+    });
+
+    if (!response.ok) {
+        throw new Error(`TTS request failed with status ${response.status}`);
+    }
+
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    if (contentType.includes("application/json")) {
+        const payload = await response.json();
+        if (payload?.fallback === "browser_speak") {
+            return null;
+        }
+        throw new Error(payload?.error || "Unexpected JSON response from streamed TTS endpoint.");
+    }
+
+    if (!response.body) {
+        throw new Error("Streamed TTS response body is unavailable.");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const chunks = [];
+    let buffer = "";
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIndex = buffer.indexOf("\n");
+
+        while (newlineIndex >= 0) {
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+
+            if (line) {
+                const msg = JSON.parse(line);
+                if (msg.type === "audio_chunk" && msg.audio_b64_wav) {
+                    const raw = atob(msg.audio_b64_wav);
+                    const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
+                    chunks.push(bytes);
+                } else if (msg.type === "error") {
+                    throw new Error(msg.detail || "Unknown streamed TTS error.");
+                }
+            }
+
+            newlineIndex = buffer.indexOf("\n");
+        }
+    }
+
+    return chunks.length ? createAudioChunksCache(chunks) : null;
+}
+
+async function warmProcessingSpeechCache() {
+    try {
+        const [processing, processingComplete] = await Promise.all([
+            fetchTTSChunks("processing"),
+            fetchTTSChunks("processing complete"),
+        ]);
+
+        speechCueCache.processing = processing;
+        speechCueCache.processingComplete = processingComplete;
+    } catch (error) {
+        console.warn("Unable to pre-cache processing speech cues.", error);
+    }
+}
+
+function queueProcessingCueForPrompt(message) {
+    if (!FRONTEND_TTS_AUTOPLAY || countWords(message) <= PROCESSING_WORD_THRESHOLD) {
+        pendingProcessingPlaybackToken = null;
+        return;
+    }
+
+    stopSpeechPlayback();
+    pendingProcessingPlaybackToken = activeSpeechPlaybackToken;
+
+    if (speechCueCache.processing?.length) {
+        queueAudioChunksForPlayback(speechCueCache.processing, pendingProcessingPlaybackToken);
+    } else {
+        browserSpeak("processing");
+    }
+}
+
+async function playProcessingCompletePrelude(playbackToken) {
+    if (playbackToken !== activeSpeechPlaybackToken) {
+        return;
+    }
+
+    if (speechCueCache.processingComplete?.length) {
+        queueAudioChunksForPlayback(speechCueCache.processingComplete, playbackToken);
+        await waitForSpeechQueueToDrain(playbackToken);
+    } else {
+        browserSpeak("processing complete");
+        await sleep(1200);
+    }
+
+    await sleep(2000);
+}
+
+async function cacheStreamedTTS(text, speakerButton, shouldAutoplay, useProcessingPrelude) {
     const response = await fetch("/text-to-speech?stream=1", {
         method: "POST",
         credentials: "include",
@@ -244,7 +445,11 @@ async function playStreamedTTS(text) {
     if (contentType.includes("application/json")) {
         const payload = await response.json();
         if (payload?.fallback === "browser_speak") {
-            browserSpeak(payload?.text || text);
+            pendingProcessingPlaybackToken = null;
+            setSpeakerState(speakerButton, "error");
+            if (shouldAutoplay) {
+                browserSpeak(payload?.text || text);
+            }
             return;
         }
         throw new Error(payload?.error || "Unexpected JSON response from streamed TTS endpoint.");
@@ -254,9 +459,20 @@ async function playStreamedTTS(text) {
         throw new Error("Streamed TTS response body is unavailable.");
     }
 
-    const playbackToken = activeSpeechPlaybackToken;
+    let playbackToken = activeSpeechPlaybackToken;
+    if (shouldAutoplay) {
+        if (useProcessingPrelude && pendingProcessingPlaybackToken === activeSpeechPlaybackToken) {
+            playbackToken = pendingProcessingPlaybackToken;
+        } else {
+            stopSpeechPlayback();
+            playbackToken = activeSpeechPlaybackToken;
+        }
+    }
+
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    const chunks = [];
+    let handledFirstChunk = false;
     let buffer = "";
 
     while (true) {
@@ -265,7 +481,7 @@ async function playStreamedTTS(text) {
             break;
         }
 
-        if (playbackToken !== activeSpeechPlaybackToken) {
+        if (shouldAutoplay && playbackToken !== activeSpeechPlaybackToken) {
             return;
         }
 
@@ -281,7 +497,19 @@ async function playStreamedTTS(text) {
                 if (msg.type === "audio_chunk" && msg.audio_b64_wav) {
                     const raw = atob(msg.audio_b64_wav);
                     const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
-                    enqueueAudioChunkForPlayback(bytes, playbackToken);
+                    chunks.push(bytes);
+
+                    if (shouldAutoplay) {
+                        if (!handledFirstChunk && useProcessingPrelude) {
+                            handledFirstChunk = true;
+                            await playProcessingCompletePrelude(playbackToken);
+                            if (playbackToken !== activeSpeechPlaybackToken) {
+                                return;
+                            }
+                        }
+
+                        enqueueAudioChunkForPlayback(bytes, playbackToken);
+                    }
                 } else if (msg.type === "error") {
                     throw new Error(msg.detail || "Unknown streamed TTS error.");
                 }
@@ -290,26 +518,35 @@ async function playStreamedTTS(text) {
             newlineIndex = buffer.indexOf("\n");
         }
     }
+
+    pendingProcessingPlaybackToken = null;
+
+    if (!chunks.length) {
+        throw new Error("No audio chunks were returned by the TTS stream.");
+    }
+
+    speakerButton.__audioChunks = createAudioChunksCache(chunks);
+    speakerButton.dataset.audioReady = "true";
+    setSpeakerState(speakerButton, "ready");
 }
 
-async function speakAssistantText(text) {
+async function cacheAssistantAudio(text, speakerButton, useProcessingPrelude) {
     const safeText = (text || "").trim();
     if (!safeText) {
+        setSpeakerState(speakerButton, "error");
+        pendingProcessingPlaybackToken = null;
         return;
     }
-
-    if (!FRONTEND_TTS_AUTOPLAY) {
-        console.info("Frontend TTS autoplay disabled; skipping browser playback.");
-        return;
-    }
-
-    stopSpeechPlayback();
 
     try {
-        await playStreamedTTS(safeText);
+        await cacheStreamedTTS(safeText, speakerButton, FRONTEND_TTS_AUTOPLAY, useProcessingPrelude);
     } catch (error) {
-        console.warn("Streamed TTS playback failed, using browser speech fallback.", error);
-        browserSpeak(safeText);
+        console.warn("Unable to cache streamed TTS audio.", error);
+        setSpeakerState(speakerButton, "error");
+        pendingProcessingPlaybackToken = null;
+        if (FRONTEND_TTS_AUTOPLAY) {
+            browserSpeak(safeText);
+        }
     }
 }
 
@@ -600,18 +837,21 @@ form.addEventListener("submit", function(e) {
     historyCursor = -1;
     setInputValue("");
 
-    streamResponse(message);
+    const useProcessingPrelude = countWords(message) > PROCESSING_WORD_THRESHOLD;
+    queueProcessingCueForPrompt(message);
+    streamResponse(message, useProcessingPrelude);
 });
 
 /* ---------------- Streaming ---------------- */
 
-function streamResponse(message) {
+function streamResponse(message, useProcessingPrelude = false) {
 
     const msg = document.createElement("div");
     msg.className = "message assistant";
 
     const bubble = document.createElement("div");
     bubble.className = "bubble";
+    const speakerButton = createSpeakerButton();
 
     // Typing indicator
     bubble.innerHTML = `
@@ -683,13 +923,14 @@ function streamResponse(message) {
             const parsedHtml = marked.parse(assistantText);
             const sanitizedHtml = DOMPurify.sanitize(parsedHtml, SANITIZE_CONFIG);
             bubble.innerHTML = sanitizedHtml;
+            bubble.appendChild(speakerButton);
 
             input.disabled = false;
             input.focus();
             stopBtn.disabled = true;
             setAvatarState("smiling");
 
-            speakAssistantText(assistantText);
+            cacheAssistantAudio(assistantText, speakerButton, useProcessingPrelude);
             resetUi();
         }
 
@@ -777,6 +1018,7 @@ updateInputHeight();
 updatePrediction();
 loadQuestionHistory().then(updatePrediction);
 announceSessionModel();
+warmProcessingSpeechCache();
 setAvatarState("smiling");
 </script>
 
