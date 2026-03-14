@@ -504,13 +504,43 @@ def _load_tts_upstream_total_timeout_seconds() -> float:
     return value
 
 
+def _load_stt_upstream_total_timeout_seconds() -> float:
+    default_timeout = 60.0
+    raw = os.environ.get("STT_UPSTREAM_TOTAL_TIMEOUT_SECONDS", str(default_timeout)).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid STT_UPSTREAM_TOTAL_TIMEOUT_SECONDS=%r; using %.1fs default.",
+            raw,
+            default_timeout,
+        )
+        return default_timeout
+
+    if value <= 0:
+        logger.warning(
+            "Non-positive STT_UPSTREAM_TOTAL_TIMEOUT_SECONDS=%r; using %.1fs default.",
+            raw,
+            default_timeout,
+        )
+        return default_timeout
+
+    return value
+
+
 TTS_MODE = os.environ.get("TTS_MODE", "").strip().lower()
 QWEN_TTS_URL = _resolve_qwen_tts_url()
 QWEN_TTS_HEALTH_URL = _resolve_qwen_tts_health_url()
 TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS = _load_tts_upstream_total_timeout_seconds()
 FRONTEND_TTS_AUTOPLAY = os.environ.get("FRONTEND_TTS_AUTOPLAY", "0").strip().lower() in {"1", "true", "yes", "on"}
+WHISPER_CPP_STT_ENDPOINT = _strip_wrapping_quotes(
+    os.environ.get("WHISPER_CPP_STT_ENDPOINT", "http://127.0.0.1:9000/inference")
+)
+STT_UPSTREAM_TOTAL_TIMEOUT_SECONDS = _load_stt_upstream_total_timeout_seconds()
 if QWEN_TTS_URL:
     logger.info("QWEN TTS proxy enabled: %s", QWEN_TTS_URL)
+if WHISPER_CPP_STT_ENDPOINT:
+    logger.info("Whisper.cpp STT proxy enabled: %s", WHISPER_CPP_STT_ENDPOINT)
 
 
 def _list_available_models() -> list[str]:
@@ -1065,9 +1095,41 @@ def add_security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
     response.headers["Content-Security-Policy"] = _build_content_security_policy()
     return response
+
+
+def _encode_multipart_form_data(fields: dict[str, str], files: list[tuple[str, str, bytes, str]]) -> tuple[bytes, str]:
+    boundary = f"----holly-stt-{secrets.token_hex(8)}"
+    parts: list[bytes] = []
+
+    for name, value in fields.items():
+        parts.extend(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"),
+                str(value).encode("utf-8"),
+                b"\r\n",
+            ]
+        )
+
+    for field_name, filename, content, content_type in files:
+        parts.extend(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                (
+                    f'Content-Disposition: form-data; name="{field_name}"; '
+                    f'filename="{filename}"\r\n'
+                ).encode("utf-8"),
+                f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"),
+                content,
+                b"\r\n",
+            ]
+        )
+
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(parts), boundary
 
 @app.route("/")
 def index():
@@ -1308,6 +1370,77 @@ def text_to_speech_proxy():
                 "reason": f"Unable to reach TTS backend: {exc}",
             }
         ), 200
+
+
+@app.route("/speech-to-text", methods=["POST"])
+def speech_to_text_proxy():
+    if "audio" not in request.files:
+        return jsonify({"error": "Missing audio upload field 'audio'."}), 400
+
+    audio_file = request.files["audio"]
+    audio_bytes = audio_file.read()
+    if not audio_bytes:
+        return jsonify({"error": "Audio payload is empty."}), 400
+
+    try:
+        safe_url = _validate_outbound_http_url(WHISPER_CPP_STT_ENDPOINT)
+    except ValueError as exc:
+        return jsonify({"error": f"Invalid WHISPER_CPP_STT_ENDPOINT: {exc}"}), 500
+
+    multipart_body, boundary = _encode_multipart_form_data(
+        fields={},
+        files=[
+            (
+                "file",
+                audio_file.filename or "speech.webm",
+                audio_bytes,
+                audio_file.mimetype or "audio/webm",
+            )
+        ],
+    )
+
+    req = urllib_request.Request(
+        safe_url,
+        data=multipart_body,
+        method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+
+    try:
+        with urllib_request.urlopen(req, timeout=STT_UPSTREAM_TOTAL_TIMEOUT_SECONDS) as upstream:  # nosec B310 - URL is validated by _validate_outbound_http_url.
+            raw_body = upstream.read()
+            content_type = upstream.headers.get("Content-Type", "")
+
+        decoded = raw_body.decode("utf-8", errors="ignore").strip()
+        transcript = ""
+        if "application/json" in content_type:
+            payload = json.loads(decoded or "{}")
+            transcript = str(
+                payload.get("text")
+                or payload.get("transcript")
+                or payload.get("result")
+                or ""
+            ).strip()
+        else:
+            try:
+                payload = json.loads(decoded or "{}")
+                transcript = str(
+                    payload.get("text")
+                    or payload.get("transcript")
+                    or payload.get("result")
+                    or ""
+                ).strip()
+            except json.JSONDecodeError:
+                transcript = decoded
+
+        return jsonify({"text": transcript}), 200
+    except urllib_error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="ignore")
+        logger.warning("Whisper.cpp STT upstream error: %s %s", exc.code, error_body)
+        return jsonify({"error": f"STT upstream HTTP {exc.code}", "upstreamError": error_body}), 502
+    except Exception as exc:
+        logger.exception("Whisper.cpp STT proxy failed.")
+        return jsonify({"error": f"Unable to reach STT backend: {exc}"}), 502
 
 
 def sse(data: dict) -> str:
