@@ -153,6 +153,7 @@ let micStream = null;
 let micRecorder = null;
 let micChunks = [];
 let isMicRecording = false;
+let micMimeType = "audio/webm";
 const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
 const PROCESSING_WORD_THRESHOLD = 7;
 const speechCueCache = {
@@ -648,9 +649,10 @@ async function submitRecordedSpeech(chunks) {
         return;
     }
 
-    const speechBlob = new Blob(chunks, { type: "audio/webm" });
+    const speechBlob = new Blob(chunks, { type: micMimeType || "audio/webm" });
     const formData = new FormData();
-    formData.append("audio", speechBlob, "speech.webm");
+    const extension = (micMimeType || "").includes("mp4") ? "m4a" : "webm";
+    formData.append("audio", speechBlob, `speech.${extension}`);
 
     micBtn.disabled = true;
     const originalLabel = micBtn.textContent;
@@ -695,10 +697,22 @@ async function startMicrophone() {
     try {
         micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         micChunks = [];
-        try {
-            micRecorder = new MediaRecorder(micStream, { mimeType: "audio/webm" });
-        } catch {
+
+        const preferredMimeTypes = [
+            "audio/webm;codecs=opus",
+            "audio/webm",
+            "audio/mp4",
+        ];
+        const selectedMimeType = preferredMimeTypes.find(
+            (mimeType) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(mimeType)
+        );
+
+        if (selectedMimeType) {
+            micMimeType = selectedMimeType;
+            micRecorder = new MediaRecorder(micStream, { mimeType: selectedMimeType });
+        } else {
             micRecorder = new MediaRecorder(micStream);
+            micMimeType = micRecorder.mimeType || "audio/webm";
         }
 
         micRecorder.addEventListener("dataavailable", (event) => {

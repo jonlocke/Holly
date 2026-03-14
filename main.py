@@ -537,6 +537,10 @@ WHISPER_CPP_STT_ENDPOINT = _strip_wrapping_quotes(
     os.environ.get("WHISPER_CPP_STT_ENDPOINT", "http://127.0.0.1:9000/inference")
 )
 STT_UPSTREAM_TOTAL_TIMEOUT_SECONDS = _load_stt_upstream_total_timeout_seconds()
+STT_UPSTREAM_FILE_FIELD = (
+    _strip_wrapping_quotes(os.environ.get("STT_UPSTREAM_FILE_FIELD", "file"))
+    or "file"
+)
 if QWEN_TTS_URL:
     logger.info("QWEN TTS proxy enabled: %s", QWEN_TTS_URL)
 if WHISPER_CPP_STT_ENDPOINT:
@@ -1374,10 +1378,11 @@ def text_to_speech_proxy():
 
 @app.route("/speech-to-text", methods=["POST"])
 def speech_to_text_proxy():
-    if "audio" not in request.files:
-        return jsonify({"error": "Missing audio upload field 'audio'."}), 400
+    uploaded_field_name = "audio" if "audio" in request.files else "file" if "file" in request.files else ""
+    if not uploaded_field_name:
+        return jsonify({"error": "Missing audio upload field ('audio' or 'file')."}), 400
 
-    audio_file = request.files["audio"]
+    audio_file = request.files[uploaded_field_name]
     audio_bytes = audio_file.read()
     if not audio_bytes:
         return jsonify({"error": "Audio payload is empty."}), 400
@@ -1388,10 +1393,10 @@ def speech_to_text_proxy():
         return jsonify({"error": f"Invalid WHISPER_CPP_STT_ENDPOINT: {exc}"}), 500
 
     multipart_body, boundary = _encode_multipart_form_data(
-        fields={},
+        fields={key: str(value) for key, value in request.form.items()},
         files=[
             (
-                "file",
+                STT_UPSTREAM_FILE_FIELD,
                 audio_file.filename or "speech.webm",
                 audio_bytes,
                 audio_file.mimetype or "audio/webm",
@@ -1437,7 +1442,7 @@ def speech_to_text_proxy():
     except urllib_error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="ignore")
         logger.warning("Whisper.cpp STT upstream error: %s %s", exc.code, error_body)
-        return jsonify({"error": f"STT upstream HTTP {exc.code}", "upstreamError": error_body}), 502
+        return jsonify({"error": f"STT upstream HTTP {exc.code}", "upstreamError": error_body}), exc.code
     except Exception as exc:
         logger.exception("Whisper.cpp STT proxy failed.")
         return jsonify({"error": f"Unable to reach STT backend: {exc}"}), 502

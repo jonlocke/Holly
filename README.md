@@ -50,6 +50,7 @@ Both `main.py` and `main-cyberpunk.py` now read startup settings from environmen
 - `TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS` (optional; default: `20`; strict total deadline for `/text-to-speech` upstream connect + response read before browser fallback is returned)
 - `WHISPER_CPP_STT_ENDPOINT` (optional; default: `http://127.0.0.1:9000/inference`; enables `/speech-to-text` proxy routing to whisper.cpp)
 - `STT_UPSTREAM_TOTAL_TIMEOUT_SECONDS` (optional; default: `60`; strict total deadline for `/speech-to-text` upstream connect + response read)
+- `STT_UPSTREAM_FILE_FIELD` (optional; default: `file`; multipart form field name used when forwarding audio to the STT backend)
 
 ### RAG embedding model
 
