@@ -97,7 +97,7 @@ Notes:
   - If `/health` is available, Holly sends TTS to `<QWEN_TTS_API_BASE>/speak`.
   - If `/health` is unavailable/fails, Holly returns JSON fallback for browser speech: `{ "fallback": "browser_speak", "text": ... }`.
   - Outside `TTS_MODE=qwen3`, routing follows `QWEN_TTS_ENDPOINT` / `QWEN_TTS_ENDPOINT_STYLE`.
-- Holly exposes `POST /speech-to-text`, receives microphone audio from the browser, and forwards multipart form-data (`file`) to `WHISPER_CPP_STT_ENDPOINT` (for example a local whisper.cpp server).
+- Holly exposes `POST /speech-to-text`, receives microphone audio from the browser as PCM WAV (`audio/wav`), and forwards multipart form-data (`file` by default) to `WHISPER_CPP_STT_ENDPOINT` (for example a local whisper.cpp server).
 
 ### TTS troubleshooting
 
