@@ -36,6 +36,7 @@
             <button type="submit">Send</button>
             <button type="button" id="stop-btn" disabled>Stop</button>
             <button type="button" id="upload-btn" class="control-btn">Upload file</button>
+            <button type="button" id="mic-btn" class="control-btn" aria-pressed="false" title="Enable microphone">🎤</button>
         </div>
 
         <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
@@ -51,6 +52,7 @@ const stopBtn = document.getElementById("stop-btn");
 const avatarThemeToggle = document.getElementById("avatar-theme-toggle");
 const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
+const micBtn = document.getElementById("mic-btn");
 const asciiRainCanvas = document.getElementById("ascii-rain");
 const hollyAvatar = document.getElementById("holly-avatar");
 
@@ -147,6 +149,10 @@ let isStreaming = false;
 let activeSpeechAudio = null;
 let activeSpeechQueue = [];
 let activeSpeechPlaybackToken = 0;
+let micStream = null;
+let micRecorder = null;
+let micChunks = [];
+let isMicRecording = false;
 const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
 const PROCESSING_WORD_THRESHOLD = 7;
 const speechCueCache = {
@@ -614,6 +620,116 @@ function setInputValue(value) {
     updatePrediction();
 }
 
+function updateMicButtonUi() {
+    micBtn.classList.toggle("mic-active", isMicRecording);
+    micBtn.setAttribute("aria-pressed", isMicRecording ? "true" : "false");
+    micBtn.title = isMicRecording ? "Disable microphone" : "Enable microphone";
+}
+
+function cleanupMicrophone() {
+    if (micRecorder && micRecorder.state !== "inactive") {
+        micRecorder.stop();
+    }
+
+    if (micStream) {
+        micStream.getTracks().forEach((track) => track.stop());
+    }
+
+    micRecorder = null;
+    micStream = null;
+    micChunks = [];
+    isMicRecording = false;
+    micBtn.disabled = false;
+    updateMicButtonUi();
+}
+
+async function submitRecordedSpeech(chunks) {
+    if (!chunks.length) {
+        return;
+    }
+
+    const speechBlob = new Blob(chunks, { type: "audio/webm" });
+    const formData = new FormData();
+    formData.append("audio", speechBlob, "speech.webm");
+
+    micBtn.disabled = true;
+    const originalLabel = micBtn.textContent;
+    micBtn.textContent = "…";
+
+    try {
+        const response = await fetch("/speech-to-text", {
+            method: "POST",
+            credentials: "include",
+            body: formData,
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload?.error || "Speech-to-text failed.");
+        }
+
+        const transcript = String(payload?.text || "").trim();
+        if (!transcript) {
+            return;
+        }
+
+        const existing = input.value.trim();
+        const nextPrompt = existing ? `${existing} ${transcript}` : transcript;
+        setInputValue(nextPrompt);
+        input.focus();
+    } catch (error) {
+        console.error("Unable to transcribe microphone input", error);
+        appendMessage(`Microphone error: ${error.message || "Unable to transcribe audio."}`, "assistant");
+    } finally {
+        micBtn.textContent = originalLabel;
+        micBtn.disabled = false;
+    }
+}
+
+async function startMicrophone() {
+    if (!("MediaRecorder" in window) || !navigator.mediaDevices?.getUserMedia) {
+        appendMessage("Microphone is not supported in this browser.", "assistant");
+        return;
+    }
+
+    try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micChunks = [];
+        try {
+            micRecorder = new MediaRecorder(micStream, { mimeType: "audio/webm" });
+        } catch {
+            micRecorder = new MediaRecorder(micStream);
+        }
+
+        micRecorder.addEventListener("dataavailable", (event) => {
+            if (event.data && event.data.size > 0) {
+                micChunks.push(event.data);
+            }
+        });
+
+        micRecorder.addEventListener("stop", async () => {
+            const chunks = [...micChunks];
+            cleanupMicrophone();
+            await submitRecordedSpeech(chunks);
+        });
+
+        micRecorder.start();
+        isMicRecording = true;
+        updateMicButtonUi();
+    } catch (error) {
+        cleanupMicrophone();
+        appendMessage("Unable to access microphone. Please allow microphone permission.", "assistant");
+    }
+}
+
+function stopMicrophone() {
+    if (micRecorder && micRecorder.state !== "inactive") {
+        micRecorder.stop();
+        return;
+    }
+    cleanupMicrophone();
+}
+
 function moveHistory(direction) {
     if (!questionHistory.length) return;
 
@@ -748,6 +864,15 @@ stopBtn.addEventListener("click", () => {
     setAvatarState(input.value.length ? "waiting" : "smiling");
     stopBtn.disabled = true;
     input.disabled = false;
+});
+
+micBtn.addEventListener("click", () => {
+    if (isMicRecording) {
+        stopMicrophone();
+        return;
+    }
+
+    startMicrophone();
 });
 
 async function uploadSelectedFile() {
@@ -1020,6 +1145,7 @@ loadQuestionHistory().then(updatePrediction);
 announceSessionModel();
 warmProcessingSpeechCache();
 setAvatarState("smiling");
+updateMicButtonUi();
 </script>
 
 </body>

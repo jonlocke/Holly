@@ -48,6 +48,8 @@ Both `main.py` and `main-cyberpunk.py` now read startup settings from environmen
 - `QWEN_TTS_ENDPOINT_STYLE` (optional; default: `quick` → upstream path `/speak`; also supports `openai` → `/v1/audio/speech`, `legacy` → `/text-to-speech`; primarily used outside `TTS_MODE=qwen3`)
 - `QWEN_TTS_ENDPOINT` (optional; overrides endpoint style with an explicit upstream path; primarily used outside `TTS_MODE=qwen3`)
 - `TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS` (optional; default: `20`; strict total deadline for `/text-to-speech` upstream connect + response read before browser fallback is returned)
+- `WHISPER_CPP_STT_ENDPOINT` (optional; default: `http://127.0.0.1:9000/inference`; enables `/speech-to-text` proxy routing to whisper.cpp)
+- `STT_UPSTREAM_TOTAL_TIMEOUT_SECONDS` (optional; default: `60`; strict total deadline for `/speech-to-text` upstream connect + response read)
 
 ### RAG embedding model
 
@@ -94,6 +96,7 @@ Notes:
   - If `/health` is available, Holly sends TTS to `<QWEN_TTS_API_BASE>/speak`.
   - If `/health` is unavailable/fails, Holly returns JSON fallback for browser speech: `{ "fallback": "browser_speak", "text": ... }`.
   - Outside `TTS_MODE=qwen3`, routing follows `QWEN_TTS_ENDPOINT` / `QWEN_TTS_ENDPOINT_STYLE`.
+- Holly exposes `POST /speech-to-text`, receives microphone audio from the browser, and forwards multipart form-data (`file`) to `WHISPER_CPP_STT_ENDPOINT` (for example a local whisper.cpp server).
 
 ### TTS troubleshooting
 
