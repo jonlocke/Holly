@@ -36,6 +36,7 @@
             <button type="submit">Send</button>
             <button type="button" id="stop-btn" disabled>Stop</button>
             <button type="button" id="upload-btn" class="control-btn">Upload file</button>
+            <button type="button" id="mic-btn" class="control-btn" aria-pressed="false" title="Enable microphone">🎤</button>
         </div>
 
         <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
@@ -51,6 +52,7 @@ const stopBtn = document.getElementById("stop-btn");
 const avatarThemeToggle = document.getElementById("avatar-theme-toggle");
 const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
+const micBtn = document.getElementById("mic-btn");
 const asciiRainCanvas = document.getElementById("ascii-rain");
 const hollyAvatar = document.getElementById("holly-avatar");
 
@@ -147,6 +149,16 @@ let isStreaming = false;
 let activeSpeechAudio = null;
 let activeSpeechQueue = [];
 let activeSpeechPlaybackToken = 0;
+let micStream = null;
+let micRecorder = null;
+let micChunks = [];
+let isMicRecording = false;
+let micMimeType = "audio/wav";
+let micAudioContext = null;
+let micSourceNode = null;
+let micProcessorNode = null;
+let micPcmChunks = [];
+let micSampleRate = 16000;
 const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
 const PROCESSING_WORD_THRESHOLD = 7;
 const speechCueCache = {
@@ -614,6 +626,212 @@ function setInputValue(value) {
     updatePrediction();
 }
 
+function updateMicButtonUi() {
+    micBtn.classList.toggle("mic-active", isMicRecording);
+    micBtn.setAttribute("aria-pressed", isMicRecording ? "true" : "false");
+    micBtn.title = isMicRecording ? "Disable microphone" : "Enable microphone";
+}
+
+function cleanupMicrophone() {
+    if (micRecorder && micRecorder.state !== "inactive") {
+        micRecorder.stop();
+    }
+
+    if (micProcessorNode) {
+        micProcessorNode.disconnect();
+    }
+
+    if (micSourceNode) {
+        micSourceNode.disconnect();
+    }
+
+    if (micAudioContext) {
+        micAudioContext.close().catch(() => {});
+    }
+
+    if (micStream) {
+        micStream.getTracks().forEach((track) => track.stop());
+    }
+
+    micRecorder = null;
+    micStream = null;
+    micChunks = [];
+    micProcessorNode = null;
+    micSourceNode = null;
+    micAudioContext = null;
+    micPcmChunks = [];
+    isMicRecording = false;
+    micBtn.disabled = false;
+    updateMicButtonUi();
+}
+
+function downsampleBuffer(samples, sourceRate, targetRate) {
+    if (targetRate >= sourceRate) {
+        return samples;
+    }
+
+    const ratio = sourceRate / targetRate;
+    const outLength = Math.floor(samples.length / ratio);
+    const out = new Float32Array(outLength);
+    let sourceIndex = 0;
+
+    for (let i = 0; i < outLength; i++) {
+        const nextSourceIndex = Math.round((i + 1) * ratio);
+        let sum = 0;
+        let count = 0;
+
+        while (sourceIndex < nextSourceIndex && sourceIndex < samples.length) {
+            sum += samples[sourceIndex];
+            sourceIndex += 1;
+            count += 1;
+        }
+
+        out[i] = count ? (sum / count) : 0;
+    }
+
+    return out;
+}
+
+function encodePcmToWav(samples, sampleRate) {
+    const pcmData = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+        const s = Math.max(-1, Math.min(1, samples[i] || 0));
+        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+
+    const wavBuffer = new ArrayBuffer(44 + pcmData.length * 2);
+    const view = new DataView(wavBuffer);
+    const writeString = (offset, value) => {
+        for (let i = 0; i < value.length; i++) {
+            view.setUint8(offset + i, value.charCodeAt(i));
+        }
+    };
+
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + pcmData.length * 2, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, "data");
+    view.setUint32(40, pcmData.length * 2, true);
+
+    let offset = 44;
+    for (let i = 0; i < pcmData.length; i++, offset += 2) {
+        view.setInt16(offset, pcmData[i], true);
+    }
+
+    return new Blob([view], { type: "audio/wav" });
+}
+
+function buildWavBlobFromPcmChunks() {
+    if (!micPcmChunks.length) {
+        return null;
+    }
+
+    const totalLength = micPcmChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+    const merged = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of micPcmChunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+    }
+
+    const downsampled = downsampleBuffer(merged, micSampleRate, 16000);
+    return encodePcmToWav(downsampled, 16000);
+}
+
+async function submitRecordedSpeech(speechBlob, filename = "speech.wav") {
+    if (!speechBlob || !speechBlob.size) {
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("audio", speechBlob, filename);
+
+    micBtn.disabled = true;
+    const originalLabel = micBtn.textContent;
+    micBtn.textContent = "…";
+
+    try {
+        const response = await fetch("/speech-to-text", {
+            method: "POST",
+            credentials: "include",
+            body: formData,
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload?.error || "Speech-to-text failed.");
+        }
+
+        const transcript = String(payload?.text || "").trim();
+        if (!transcript) {
+            return;
+        }
+
+        const existing = input.value.trim();
+        const nextPrompt = existing ? `${existing} ${transcript}` : transcript;
+        setInputValue(nextPrompt);
+        input.focus();
+    } catch (error) {
+        console.error("Unable to transcribe microphone input", error);
+        appendMessage(`Microphone error: ${error.message || "Unable to transcribe audio."}`, "assistant");
+    } finally {
+        micBtn.textContent = originalLabel;
+        micBtn.disabled = false;
+    }
+}
+
+async function startMicrophone() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+        appendMessage("Microphone is not supported in this browser.", "assistant");
+        return;
+    }
+
+    try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micPcmChunks = [];
+        micAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+        micSampleRate = micAudioContext.sampleRate;
+        micSourceNode = micAudioContext.createMediaStreamSource(micStream);
+        micProcessorNode = micAudioContext.createScriptProcessor(4096, 1, 1);
+
+        micProcessorNode.onaudioprocess = (event) => {
+            if (!isMicRecording) {
+                return;
+            }
+            const channelData = event.inputBuffer.getChannelData(0);
+            micPcmChunks.push(new Float32Array(channelData));
+        };
+
+        micSourceNode.connect(micProcessorNode);
+        micProcessorNode.connect(micAudioContext.destination);
+
+        isMicRecording = true;
+        updateMicButtonUi();
+    } catch (error) {
+        cleanupMicrophone();
+        appendMessage("Unable to access microphone. Please allow microphone permission.", "assistant");
+    }
+}
+
+function stopMicrophone() {
+    if (!isMicRecording) {
+        cleanupMicrophone();
+        return;
+    }
+
+    const wavBlob = buildWavBlobFromPcmChunks();
+    cleanupMicrophone();
+    submitRecordedSpeech(wavBlob, "speech.wav");
+}
+
 function moveHistory(direction) {
     if (!questionHistory.length) return;
 
@@ -748,6 +966,15 @@ stopBtn.addEventListener("click", () => {
     setAvatarState(input.value.length ? "waiting" : "smiling");
     stopBtn.disabled = true;
     input.disabled = false;
+});
+
+micBtn.addEventListener("click", () => {
+    if (isMicRecording) {
+        stopMicrophone();
+        return;
+    }
+
+    startMicrophone();
 });
 
 async function uploadSelectedFile() {
@@ -1020,6 +1247,7 @@ loadQuestionHistory().then(updatePrediction);
 announceSessionModel();
 warmProcessingSpeechCache();
 setAvatarState("smiling");
+updateMicButtonUi();
 </script>
 
 </body>
