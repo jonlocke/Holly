@@ -383,6 +383,12 @@ textarea::placeholder {
     background: #f3f4f6;
 }
 
+#mic-btn.mic-active {
+    background: #dcfce7;
+    border-color: #22c55e;
+    color: #166534;
+}
+
 /* ---------- Cursor ---------- */
 
 .cursor {
