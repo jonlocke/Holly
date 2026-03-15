@@ -30,5 +30,6 @@ echo "Run with: docker run --rm \
 -e OLLAMA_MODEL=\"$OLLAMA_MODEL\" \
 -e OLLAMA_BEARER_TOKEN=\"$OLLAMA_BEARER_TOKEN\" \
 -e QWEN_TTS_API_BASE=http://192.168.1.154:8765 \
+-e WHISPER_CPP_STT_ENDPOINT=http://holly:9000 \
 -e QWEN_TTS_ENDPOINT=/speak \
 holly-ux"
