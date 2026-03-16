@@ -676,7 +676,11 @@ def _stream_chat_tokens(prompt: str, session_id: str | None = None):
             raise RuntimeError(
                 f"Gateway chat request to {endpoint} failed ({exc.code}): {details or exc.reason}"
             ) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise RuntimeError("Gateway chat request timed out.") from exc
         except urllib_error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise RuntimeError("Gateway chat request timed out.") from exc
             raise RuntimeError(f"Unable to reach gateway chat endpoint {endpoint}: {exc}") from exc
         return
 
@@ -1780,7 +1784,13 @@ def stream():
 
         except RuntimeError as exc:
             logger.warning("Gateway runtime error while generating stream response: %s", exc)
-            yield sse({"type": "error", "error": str(exc)})
+            user_error = "Unable to process request right now."
+            if "timed out" in str(exc).lower():
+                user_error = (
+                    "Unable to process request right now. "
+                    "The model request timed out; please try again."
+                )
+            yield sse({"type": "error", "error": user_error})
         except Exception:
             logger.exception("Unhandled error while generating stream response.")
             yield sse({"type": "error", "error": "Unable to process request right now."})
