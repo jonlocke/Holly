@@ -536,6 +536,8 @@ TTS_MODE = os.environ.get("TTS_MODE", "").strip().lower()
 QWEN_TTS_URL = _resolve_qwen_tts_url()
 QWEN_TTS_HEALTH_URL = _resolve_qwen_tts_health_url()
 TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS = _load_tts_upstream_total_timeout_seconds()
+TTS_BUSY_RETRY_ATTEMPTS = max(1, int(os.environ.get("TTS_BUSY_RETRY_ATTEMPTS", "3").strip() or "3"))
+TTS_BUSY_RETRY_DELAY_SECONDS = max(0.0, float(os.environ.get("TTS_BUSY_RETRY_DELAY_SECONDS", "0.25").strip() or "0.25"))
 FRONTEND_TTS_AUTOPLAY = os.environ.get("FRONTEND_TTS_AUTOPLAY", "0").strip().lower() in {"1", "true", "yes", "on"}
 WHISPER_CPP_STT_ENDPOINT = _strip_wrapping_quotes(
     os.environ.get("WHISPER_CPP_STT_ENDPOINT", "http://127.0.0.1:9000/inference")
@@ -676,7 +678,11 @@ def _stream_chat_tokens(prompt: str, session_id: str | None = None):
             raise RuntimeError(
                 f"Gateway chat request to {endpoint} failed ({exc.code}): {details or exc.reason}"
             ) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise RuntimeError("Gateway chat request timed out.") from exc
         except urllib_error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise RuntimeError("Gateway chat request timed out.") from exc
             raise RuntimeError(f"Unable to reach gateway chat endpoint {endpoint}: {exc}") from exc
         return
 
@@ -1332,8 +1338,56 @@ def text_to_speech_proxy():
         headers={"Content-Type": "application/json"},
     )
 
+    last_busy_body = ""
+    for attempt in range(1, TTS_BUSY_RETRY_ATTEMPTS + 1):
+        try:
+            upstream = urllib_request.urlopen(req, timeout=TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS)  # nosec B310 - URL is validated by _validate_outbound_http_url.
+            break
+        except urllib_error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="ignore")
+            is_busy = exc.code == 429 and "busy" in error_body.lower()
+            if is_busy:
+                last_busy_body = error_body
+                if attempt < TTS_BUSY_RETRY_ATTEMPTS:
+                    logger.info(
+                        "QWEN TTS busy (attempt %s/%s), retrying in %.2fs.",
+                        attempt,
+                        TTS_BUSY_RETRY_ATTEMPTS,
+                        TTS_BUSY_RETRY_DELAY_SECONDS,
+                    )
+                    time.sleep(TTS_BUSY_RETRY_DELAY_SECONDS)
+                    continue
+
+                logger.warning("QWEN TTS busy after %s attempts.", TTS_BUSY_RETRY_ATTEMPTS)
+                return jsonify(
+                    {
+                        "fallback": "browser_speak",
+                        "text": fallback_text,
+                        "reason": "TTS synth is busy; please retry shortly.",
+                        "upstreamError": last_busy_body,
+                    }
+                ), 200
+
+            logger.warning("QWEN TTS upstream error: %s %s", exc.code, error_body)
+            return jsonify(
+                {
+                    "fallback": "browser_speak",
+                    "text": fallback_text,
+                    "reason": f"TTS upstream HTTP {exc.code}",
+                    "upstreamError": error_body,
+                }
+            ), 200
+        except Exception as exc:
+            logger.exception("QWEN TTS proxy failed.")
+            return jsonify(
+                {
+                    "fallback": "browser_speak",
+                    "text": fallback_text,
+                    "reason": f"Unable to reach TTS backend: {exc}",
+                }
+            ), 200
+
     try:
-        upstream = urllib_request.urlopen(req, timeout=TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS)  # nosec B310 - URL is validated by _validate_outbound_http_url.
 
         if stream_mode_requested:
             def _stream_upstream_response():
@@ -1360,17 +1414,6 @@ def text_to_speech_proxy():
         content_type = upstream.headers.get("Content-Type", "application/octet-stream")
         upstream.close()
         return Response(body, status=upstream.status, content_type=content_type)
-    except urllib_error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="ignore")
-        logger.warning("QWEN TTS upstream error: %s %s", exc.code, error_body)
-        return jsonify(
-            {
-                "fallback": "browser_speak",
-                "text": fallback_text,
-                "reason": f"TTS upstream HTTP {exc.code}",
-                "upstreamError": error_body,
-            }
-        ), 200
     except Exception as exc:
         logger.exception("QWEN TTS proxy failed.")
         return jsonify(
@@ -1780,7 +1823,13 @@ def stream():
 
         except RuntimeError as exc:
             logger.warning("Gateway runtime error while generating stream response: %s", exc)
-            yield sse({"type": "error", "error": str(exc)})
+            user_error = "Unable to process request right now."
+            if "timed out" in str(exc).lower():
+                user_error = (
+                    "Unable to process request right now. "
+                    "The model request timed out; please try again."
+                )
+            yield sse({"type": "error", "error": user_error})
         except Exception:
             logger.exception("Unhandled error while generating stream response.")
             yield sse({"type": "error", "error": "Unable to process request right now."})
