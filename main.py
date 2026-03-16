@@ -667,6 +667,8 @@ def _stream_chat_tokens(prompt: str, session_id: str | None = None):
                             yield content
         except urllib_error.HTTPError as exc:
             details = exc.read().decode("utf-8", errors="ignore")
+            if exc.code == 401:
+                raise RuntimeError("Gateway: Unauthorized") from exc
             raise RuntimeError(
                 f"Gateway chat request to {endpoint} failed ({exc.code}): {details or exc.reason}"
             ) from exc
@@ -1772,6 +1774,9 @@ def stream():
 
             yield sse({"type": "done"})
 
+        except RuntimeError as exc:
+            logger.warning("Gateway runtime error while generating stream response: %s", exc)
+            yield sse({"type": "error", "error": str(exc)})
         except Exception:
             logger.exception("Unhandled error while generating stream response.")
             yield sse({"type": "error", "error": "Unable to process request right now."})
