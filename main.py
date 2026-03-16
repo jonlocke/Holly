@@ -17,9 +17,13 @@ from urllib.parse import urlparse
 from urllib import request as urllib_request
 from urllib import error as urllib_error
 
+from werkzeug.middleware.proxy_fix import ProxyFix
 from math import sqrt
 
 app = Flask(__name__)
+# Honor reverse-proxy headers (X-Forwarded-Proto, X-Forwarded-Prefix, etc.)
+# so url_for() generates prefix-aware routes when mounted under /test.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 _configured_secret = os.environ.get("FLASK_SECRET_KEY", "").strip()
 app.secret_key = _configured_secret or secrets.token_hex(32)
 

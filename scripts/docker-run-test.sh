@@ -1,8 +1,9 @@
+#!/bin/bash
 docker run -d \
 --restart unless-stopped \
 --name holly-test \
 -p 5050:5000 \
--e WHISPER_CPP_STT_ENDPOINT=http://holly:9000/inference \
+-e WHISPER_CPP_STT_ENDPOINT="$WHISPER_CPP_STT_ENDPOINT" \
 -e SESSION_COOKIE_SECURE=false \
 -e TTS_MODE=qwen3 \
 -e QWEN3_TTS_SPEAK_QUERY="$QWEN3_TTS_SPEAK_QUERY" \
