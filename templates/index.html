@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8" />
     <title>Holly 6000</title>
-    <link rel="icon" type="image/png" href="/static/favicon-holly.png" />
-    <link rel="stylesheet" href="/static/style.css" />
-    <script src="/static/vendor/marked/marked.min.js"></script>
-    <script src="/static/vendor/dompurify/purify.min.js"></script>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon-holly.png') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script src="{{ url_for('static', filename='vendor/marked/marked.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/dompurify/purify.min.js') }}"></script>
 </head>
 <body>
 <canvas id="ascii-rain" class="ascii-rain" aria-hidden="true"></canvas>
@@ -44,6 +44,17 @@
 </div>
 
 <script>
+const SCRIPT_ROOT = {{ request.script_root|tojson }};
+const detectedBaseFromStatic = (() => {
+    const styleHref = document.querySelector('link[rel="stylesheet"]')?.getAttribute('href') || "";
+    const normalized = styleHref.startsWith("http") ? new URL(styleHref).pathname : styleHref;
+    const marker = "/static/";
+    const index = normalized.indexOf(marker);
+    return index >= 0 ? normalized.slice(0, index) : "";
+})();
+const APP_BASE_PATH = SCRIPT_ROOT || detectedBaseFromStatic;
+const appUrl = (path) => `${APP_BASE_PATH}${path}`;
+
 const form = document.getElementById("chat-form");
 const input = document.getElementById("user-input");
 const output = document.getElementById("output");
@@ -160,6 +171,14 @@ let micProcessorNode = null;
 let micPcmChunks = [];
 let micSampleRate = 16000;
 const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
+const ROUTES = {
+    stream: appUrl("/stream"),
+    upload: appUrl("/upload"),
+    questionHistory: appUrl("/question-history"),
+    sessionInfo: appUrl("/session-info"),
+    textToSpeech: appUrl("/text-to-speech"),
+    speechToText: appUrl("/speech-to-text"),
+};
 const PROCESSING_WORD_THRESHOLD = 7;
 const speechCueCache = {
     processing: null,
@@ -331,7 +350,7 @@ async function waitForSpeechQueueToDrain(playbackToken, timeoutMs = 15000) {
 }
 
 async function fetchTTSChunks(text) {
-    const response = await fetch("/text-to-speech?stream=1", {
+    const response = await fetch(`${ROUTES.textToSpeech}?stream=1`, {
         method: "POST",
         credentials: "include",
         headers: {
@@ -440,7 +459,7 @@ async function playProcessingCompletePrelude(playbackToken) {
 }
 
 async function cacheStreamedTTS(text, speakerButton, shouldAutoplay, useProcessingPrelude) {
-    const response = await fetch("/text-to-speech?stream=1", {
+    const response = await fetch(`${ROUTES.textToSpeech}?stream=1`, {
         method: "POST",
         credentials: "include",
         headers: {
@@ -759,7 +778,7 @@ async function submitRecordedSpeech(speechBlob, filename = "speech.wav") {
     micBtn.textContent = "…";
 
     try {
-        const response = await fetch("/speech-to-text", {
+        const response = await fetch(ROUTES.speechToText, {
             method: "POST",
             credentials: "include",
             body: formData,
@@ -851,7 +870,7 @@ function moveHistory(direction) {
 
 async function loadQuestionHistory() {
     try {
-        const response = await fetch("/question-history", { credentials: "include" });
+        const response = await fetch(ROUTES.questionHistory, { credentials: "include" });
         if (!response.ok) return;
 
         const payload = await response.json();
@@ -865,7 +884,7 @@ async function loadQuestionHistory() {
 
 async function announceSessionModel() {
     try {
-        const response = await fetch("/session-info", { credentials: "include" });
+        const response = await fetch(ROUTES.sessionInfo, { credentials: "include" });
         if (!response.ok) {
             return;
         }
@@ -988,7 +1007,7 @@ async function uploadSelectedFile() {
     uploadBtn.textContent = "Uploading...";
 
     try {
-        const response = await fetch("/upload", {
+        const response = await fetch(ROUTES.upload, {
             method: "POST",
             credentials: "include",
             body: formData,
@@ -1168,7 +1187,7 @@ function streamResponse(message, useProcessingPrelude = false) {
         }
     };
 
-    fetch("/stream", {
+    fetch(ROUTES.stream, {
         method: "POST",
         credentials: "include",
         headers: {

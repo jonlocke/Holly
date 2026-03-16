@@ -133,7 +133,7 @@ textarea:focus-visible {
 .holly-avatar {
     width: 144px;
     aspect-ratio: 1 / 1;
-    background-image: url("/static/holly.png");
+    background-image: url("holly.png");
     background-repeat: no-repeat;
     /* Each frame is tall; crop to square and shift down so the face isn't cut off. */
     background-size: 300% 200%;
