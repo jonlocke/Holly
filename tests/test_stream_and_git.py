@@ -45,6 +45,19 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         self.assertIn("Unable to process request right now.", body)
         self.assertNotIn("secret upstream details", body)
 
+
+    def test_stream_returns_timeout_specific_message(self):
+        with mock.patch.object(
+            self.main,
+            "_stream_chat_tokens",
+            side_effect=RuntimeError("Gateway chat request timed out."),
+        ):
+            response = self.client.post("/stream", json={"message": "hello"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("The model request timed out; please try again.", body)
+
     def test_session_info_marks_new_session_once(self):
         first_response = self.client.get("/session-info")
         self.assertEqual(first_response.status_code, 200)
