@@ -1,8 +1,10 @@
 #!/bin/bash
+./killme.sh holly-test
 docker run -d \
+-p 5050:5000 \
 --restart unless-stopped \
 --name holly-test \
--p 5050:5000 \
+--network tts-net \
 -e WHISPER_CPP_STT_ENDPOINT="$WHISPER_CPP_STT_ENDPOINT" \
 -e SESSION_COOKIE_SECURE=false \
 -e TTS_MODE=qwen3 \
@@ -19,3 +21,4 @@ docker run -d \
 -e QWEN_TTS_VOICE=ryan \
 -e QWEN_TTS_LANGUAGE=english \
 holly-ux
+docker logs holly-test -f
