@@ -1,6 +1,8 @@
+./killme.sh holly5005
 docker run -d \
 --restart unless-stopped \
 --name holly5005 \
+--network tts-net \
 -p 5005:5000 \
 -e WHISPER_CPP_STT_ENDPOINT="$WHISPER_CPP_STT_ENDPOINT" \
 -e SESSION_COOKIE_SECURE=false \
