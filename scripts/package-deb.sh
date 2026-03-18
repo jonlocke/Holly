@@ -4,8 +4,8 @@ set -euo pipefail
 APP_NAME="holly-ux"
 APP_DIR="/opt/${APP_NAME}"
 SERVICE_NAME="${APP_NAME}.service"
-MAINTAINER="Clyde Maintainers"
-DESCRIPTION="Clyde UX Flask application service"
+MAINTAINER="Holly Maintainers"
+DESCRIPTION="Holly UX Flask application service"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -55,7 +55,6 @@ mkdir -p "${DEBIAN_DIR}" "${APP_STAGE_DIR}" "${STAGE_ROOT}/lib/systemd/system" "
 
 # Copy runtime assets into the installed application directory.
 install -m 0644 "${REPO_ROOT}/main.py" "${APP_STAGE_DIR}/main.py"
-install -m 0644 "${REPO_ROOT}/main-cyberpunk.py" "${APP_STAGE_DIR}/main-cyberpunk.py"
 install -m 0644 "${REPO_ROOT}/requirements.txt" "${APP_STAGE_DIR}/requirements.txt"
 install -m 0644 "${REPO_ROOT}/README.md" "${APP_STAGE_DIR}/README.md"
 install -m 0644 "${REPO_ROOT}/LICENSE" "${APP_STAGE_DIR}/LICENSE"
@@ -92,7 +91,7 @@ Maintainer: ${MAINTAINER}
 Depends: adduser, systemd
 Installed-Size: ${INSTALLED_SIZE}
 Description: ${DESCRIPTION}
- Web UX service for Clyde, packaged with a dedicated Python virtualenv.
+ Web UX service for Holly, packaged with a dedicated Python virtualenv.
 CONTROL
 
 cat > "${DEBIAN_DIR}/conffiles" <<CONFFILES
@@ -107,12 +106,12 @@ APP_NAME="holly-ux"
 SERVICE_NAME="${APP_NAME}.service"
 APP_DIR="/opt/${APP_NAME}"
 
-if ! id -u clyde >/dev/null 2>&1; then
-  adduser --system --group --home /var/lib/${APP_NAME} --no-create-home clyde
+if ! id -u holly >/dev/null 2>&1; then
+  adduser --system --group --home /var/lib/${APP_NAME} --no-create-home holly
 fi
 
-install -d -o clyde -g clyde /var/lib/${APP_NAME} /var/log/${APP_NAME}
-chown -R clyde:clyde "${APP_DIR}" || true
+install -d -o holly -g holly /var/lib/${APP_NAME} /var/log/${APP_NAME}
+chown -R holly:holly "${APP_DIR}" || true
 
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true
@@ -138,7 +137,7 @@ APP_NAME="holly-ux"
 SERVICE_NAME="${APP_NAME}.service"
 
 if command -v systemctl >/dev/null 2>&1; then
-  if [[ "$1" == "remove" ]]; then
+  if [[ "$1" == "remove" || "$1" == "deconfigure" || "$1" == "upgrade" || "$1" == "failed-upgrade" ]]; then
     systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
     systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
   fi
@@ -150,9 +149,18 @@ cat > "${DEBIAN_DIR}/postrm" <<'POSTRM'
 set -e
 
 APP_NAME="holly-ux"
+<<<<<<< HEAD
+SERVICE_NAME="${APP_NAME}.service"
+=======
+>>>>>>> 81f4d1b2207cd1ea161d4cf5d4f7b94b7115d2e6
 
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl daemon-reload || true
+  if [[ "$1" == "remove" || "$1" == "purge" || "$1" == "failed-upgrade" || "$1" == "abort-install" || "$1" == "abort-upgrade" || "$1" == "disappear" ]]; then
+    systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    systemctl daemon-reload || true
+    systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
+  fi
 fi
 
 if [[ "$1" == "purge" ]]; then

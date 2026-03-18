@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8" />
     <title>Holly 6000</title>
-    <link rel="icon" type="image/png" href="/static/favicon-holly.png" />
-    <link rel="stylesheet" href="/static/style.css" />
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon-holly.png') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <script src="{{ url_for('static', filename='vendor/marked/marked.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/dompurify/purify.min.js') }}"></script>
 </head>
 <body>
 <canvas id="ascii-rain" class="ascii-rain" aria-hidden="true"></canvas>
@@ -36,13 +36,26 @@
             <button type="submit">Send</button>
             <button type="button" id="stop-btn" disabled>Stop</button>
             <button type="button" id="upload-btn" class="control-btn">Upload file</button>
+            <button type="button" id="mic-btn" class="control-btn" aria-pressed="false" title="Enable microphone">🎤</button>
         </div>
+        <div id="mic-status" class="mic-status" aria-live="polite"></div>
 
         <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
     </form>
 </div>
 
 <script>
+const SCRIPT_ROOT = {{ request.script_root|tojson }};
+const detectedBaseFromStatic = (() => {
+    const styleHref = document.querySelector('link[rel="stylesheet"]')?.getAttribute('href') || "";
+    const normalized = styleHref.startsWith("http") ? new URL(styleHref).pathname : styleHref;
+    const marker = "/static/";
+    const index = normalized.indexOf(marker);
+    return index >= 0 ? normalized.slice(0, index) : "";
+})();
+const APP_BASE_PATH = SCRIPT_ROOT || detectedBaseFromStatic;
+const appUrl = (path) => `${APP_BASE_PATH}${path}`;
+
 const form = document.getElementById("chat-form");
 const input = document.getElementById("user-input");
 const output = document.getElementById("output");
@@ -51,6 +64,8 @@ const stopBtn = document.getElementById("stop-btn");
 const avatarThemeToggle = document.getElementById("avatar-theme-toggle");
 const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
+const micBtn = document.getElementById("mic-btn");
+const micStatus = document.getElementById("mic-status");
 const asciiRainCanvas = document.getElementById("ascii-rain");
 const hollyAvatar = document.getElementById("holly-avatar");
 
@@ -144,6 +159,435 @@ let questionHistory = [];
 let historyCursor = -1;
 const MAX_MESSAGES = 100;
 let isStreaming = false;
+let activeSpeechAudio = null;
+let activeSpeechQueue = [];
+let activeSpeechPlaybackToken = 0;
+let micStream = null;
+let micRecorder = null;
+let micChunks = [];
+let isMicRecording = false;
+let micMimeType = "audio/wav";
+let micAudioContext = null;
+let micSourceNode = null;
+let micProcessorNode = null;
+let micPcmChunks = [];
+let micSampleRate = 16000;
+let micSilenceTimeoutId = null;
+let micSpeechDetected = false;
+let micRecordingToken = 0;
+let isMicSubmitting = false;
+const MIC_AUTO_STOP_SILENCE_MS = 2000;
+const MIC_SPEECH_THRESHOLD = 0.015;
+const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
+const ROUTES = {
+    stream: appUrl("/stream"),
+    upload: appUrl("/upload"),
+    questionHistory: appUrl("/question-history"),
+    sessionInfo: appUrl("/session-info"),
+    textToSpeech: appUrl("/text-to-speech"),
+    speechToText: appUrl("/speech-to-text"),
+};
+const PROCESSING_WORD_THRESHOLD = 7;
+const speechCueCache = {
+    processing: null,
+    processingComplete: null,
+};
+let pendingProcessingPlaybackToken = null;
+
+function countWords(text) {
+    const safeText = (text || "").trim();
+    if (!safeText) {
+        return 0;
+    }
+    return safeText.split(/\s+/).length;
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createAudioChunksCache(chunks) {
+    return chunks.map((chunk) => new Uint8Array(chunk));
+}
+
+function setSpeakerState(button, state) {
+    button.classList.remove("speaker-loading", "speaker-ready", "speaker-error");
+    button.classList.add(`speaker-${state}`);
+    button.disabled = state !== "ready";
+    button.setAttribute("aria-busy", state === "loading" ? "true" : "false");
+
+    if (state === "loading") {
+        button.title = "Preparing audio...";
+    } else if (state === "ready") {
+        button.title = "Play cached audio";
+    } else {
+        button.title = "Audio unavailable";
+    }
+}
+
+function queueAudioChunksForPlayback(chunks, playbackToken) {
+    if (!chunks || !chunks.length) {
+        return;
+    }
+
+    for (const chunk of chunks) {
+        enqueueAudioChunkForPlayback(chunk, playbackToken);
+    }
+}
+
+function playCachedAudio(chunks) {
+    if (!chunks || !chunks.length) {
+        return;
+    }
+
+    stopSpeechPlayback();
+    queueAudioChunksForPlayback(chunks, activeSpeechPlaybackToken);
+}
+
+function createSpeakerButton() {
+    const button = document.createElement("button");
+    button.className = "speaker-indicator speaker-loading";
+    button.type = "button";
+    button.textContent = "🔊";
+    button.setAttribute("aria-label", "Response audio");
+    button.dataset.audioReady = "false";
+    setSpeakerState(button, "loading");
+
+    button.addEventListener("click", () => {
+        const rawChunks = button.__audioChunks;
+        if (!rawChunks || !rawChunks.length) {
+            return;
+        }
+        playCachedAudio(rawChunks);
+    });
+
+    return button;
+}
+
+function stopSpeechPlayback() {
+    activeSpeechPlaybackToken += 1;
+    activeSpeechQueue = [];
+
+    if (activeSpeechAudio) {
+        activeSpeechAudio.pause();
+        activeSpeechAudio.src = "";
+        activeSpeechAudio = null;
+    }
+
+    if ("speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+    }
+}
+
+function browserSpeak(text) {
+    if (!("speechSynthesis" in window)) {
+        return;
+    }
+
+    const safeText = (text || "").trim();
+    if (!safeText) {
+        return;
+    }
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(safeText);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    window.speechSynthesis.speak(utterance);
+}
+
+function enqueueAudioChunkForPlayback(wavBytes, playbackToken) {
+    if (!wavBytes || wavBytes.length === 0 || playbackToken !== activeSpeechPlaybackToken) {
+        return;
+    }
+
+    activeSpeechQueue.push(wavBytes);
+
+    const pumpQueue = async () => {
+        if (playbackToken !== activeSpeechPlaybackToken || activeSpeechAudio || activeSpeechQueue.length === 0) {
+            return;
+        }
+
+        const nextBytes = activeSpeechQueue.shift();
+        const audioBlob = new Blob([nextBytes], { type: "audio/wav" });
+        const objectUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(objectUrl);
+        activeSpeechAudio = audio;
+
+        const clearActiveAudio = () => {
+            if (activeSpeechAudio === audio) {
+                activeSpeechAudio = null;
+            }
+            URL.revokeObjectURL(objectUrl);
+        };
+
+        audio.onended = () => {
+            clearActiveAudio();
+            pumpQueue();
+        };
+        audio.onerror = () => {
+            clearActiveAudio();
+            pumpQueue();
+        };
+
+        try {
+            await audio.play();
+        } catch (error) {
+            clearActiveAudio();
+            pumpQueue();
+        }
+    };
+
+    pumpQueue();
+}
+
+async function waitForSpeechQueueToDrain(playbackToken, timeoutMs = 15000) {
+    const startedAt = Date.now();
+
+    while (playbackToken === activeSpeechPlaybackToken) {
+        if (!activeSpeechAudio && activeSpeechQueue.length === 0) {
+            return;
+        }
+
+        if (Date.now() - startedAt > timeoutMs) {
+            return;
+        }
+
+        await sleep(50);
+    }
+}
+
+async function fetchTTSChunks(text) {
+    const response = await fetch(`${ROUTES.textToSpeech}?stream=1`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text }),
+    });
+
+    if (!response.ok) {
+        throw new Error(`TTS request failed with status ${response.status}`);
+    }
+
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    if (contentType.includes("application/json")) {
+        const payload = await response.json();
+        if (payload?.fallback === "browser_speak") {
+            return null;
+        }
+        throw new Error(payload?.error || "Unexpected JSON response from streamed TTS endpoint.");
+    }
+
+    if (!response.body) {
+        throw new Error("Streamed TTS response body is unavailable.");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const chunks = [];
+    let buffer = "";
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIndex = buffer.indexOf("\n");
+
+        while (newlineIndex >= 0) {
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+
+            if (line) {
+                const msg = JSON.parse(line);
+                if (msg.type === "audio_chunk" && msg.audio_b64_wav) {
+                    const raw = atob(msg.audio_b64_wav);
+                    const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
+                    chunks.push(bytes);
+                } else if (msg.type === "error") {
+                    throw new Error(msg.detail || "Unknown streamed TTS error.");
+                }
+            }
+
+            newlineIndex = buffer.indexOf("\n");
+        }
+    }
+
+    return chunks.length ? createAudioChunksCache(chunks) : null;
+}
+
+async function warmProcessingSpeechCache() {
+    try {
+        const [processing, processingComplete] = await Promise.all([
+            fetchTTSChunks("processing"),
+            fetchTTSChunks("processing complete"),
+        ]);
+
+        speechCueCache.processing = processing;
+        speechCueCache.processingComplete = processingComplete;
+    } catch (error) {
+        console.warn("Unable to pre-cache processing speech cues.", error);
+    }
+}
+
+function queueProcessingCueForPrompt(message) {
+    if (!FRONTEND_TTS_AUTOPLAY || countWords(message) <= PROCESSING_WORD_THRESHOLD) {
+        pendingProcessingPlaybackToken = null;
+        return;
+    }
+
+    stopSpeechPlayback();
+    pendingProcessingPlaybackToken = activeSpeechPlaybackToken;
+
+    if (speechCueCache.processing?.length) {
+        queueAudioChunksForPlayback(speechCueCache.processing, pendingProcessingPlaybackToken);
+    } else {
+        browserSpeak("processing");
+    }
+}
+
+async function playProcessingCompletePrelude(playbackToken) {
+    if (playbackToken !== activeSpeechPlaybackToken) {
+        return;
+    }
+
+    if (speechCueCache.processingComplete?.length) {
+        queueAudioChunksForPlayback(speechCueCache.processingComplete, playbackToken);
+        await waitForSpeechQueueToDrain(playbackToken);
+    } else {
+        browserSpeak("processing complete");
+        await sleep(1200);
+    }
+
+    await sleep(2000);
+}
+
+async function cacheStreamedTTS(text, speakerButton, shouldAutoplay, useProcessingPrelude) {
+    const response = await fetch(`${ROUTES.textToSpeech}?stream=1`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text }),
+    });
+
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    if (!response.ok) {
+        throw new Error(`TTS request failed with status ${response.status}`);
+    }
+
+    if (contentType.includes("application/json")) {
+        const payload = await response.json();
+        if (payload?.fallback === "browser_speak") {
+            pendingProcessingPlaybackToken = null;
+            setSpeakerState(speakerButton, "error");
+            if (shouldAutoplay) {
+                browserSpeak(payload?.text || text);
+            }
+            return;
+        }
+        throw new Error(payload?.error || "Unexpected JSON response from streamed TTS endpoint.");
+    }
+
+    if (!response.body) {
+        throw new Error("Streamed TTS response body is unavailable.");
+    }
+
+    let playbackToken = activeSpeechPlaybackToken;
+    if (shouldAutoplay) {
+        if (useProcessingPrelude && pendingProcessingPlaybackToken === activeSpeechPlaybackToken) {
+            playbackToken = pendingProcessingPlaybackToken;
+        } else {
+            stopSpeechPlayback();
+            playbackToken = activeSpeechPlaybackToken;
+        }
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const chunks = [];
+    let handledFirstChunk = false;
+    let buffer = "";
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            break;
+        }
+
+        if (shouldAutoplay && playbackToken !== activeSpeechPlaybackToken) {
+            return;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        let newlineIndex = buffer.indexOf("\n");
+
+        while (newlineIndex >= 0) {
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+
+            if (line) {
+                const msg = JSON.parse(line);
+                if (msg.type === "audio_chunk" && msg.audio_b64_wav) {
+                    const raw = atob(msg.audio_b64_wav);
+                    const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
+                    chunks.push(bytes);
+
+                    if (shouldAutoplay) {
+                        if (!handledFirstChunk && useProcessingPrelude) {
+                            handledFirstChunk = true;
+                            await playProcessingCompletePrelude(playbackToken);
+                            if (playbackToken !== activeSpeechPlaybackToken) {
+                                return;
+                            }
+                        }
+
+                        enqueueAudioChunkForPlayback(bytes, playbackToken);
+                    }
+                } else if (msg.type === "error") {
+                    throw new Error(msg.detail || "Unknown streamed TTS error.");
+                }
+            }
+
+            newlineIndex = buffer.indexOf("\n");
+        }
+    }
+
+    pendingProcessingPlaybackToken = null;
+
+    if (!chunks.length) {
+        throw new Error("No audio chunks were returned by the TTS stream.");
+    }
+
+    speakerButton.__audioChunks = createAudioChunksCache(chunks);
+    speakerButton.dataset.audioReady = "true";
+    setSpeakerState(speakerButton, "ready");
+}
+
+async function cacheAssistantAudio(text, speakerButton, useProcessingPrelude) {
+    const safeText = (text || "").trim();
+    if (!safeText) {
+        setSpeakerState(speakerButton, "error");
+        pendingProcessingPlaybackToken = null;
+        return;
+    }
+
+    try {
+        await cacheStreamedTTS(safeText, speakerButton, FRONTEND_TTS_AUTOPLAY, useProcessingPrelude);
+    } catch (error) {
+        console.warn("Unable to cache streamed TTS audio.", error);
+        setSpeakerState(speakerButton, "error");
+        pendingProcessingPlaybackToken = null;
+        if (FRONTEND_TTS_AUTOPLAY) {
+            browserSpeak(safeText);
+        }
+    }
+}
 
 function setAvatarState(state) {
     hollyAvatar.classList.remove("avatar-waiting", "avatar-thinking", "avatar-smiling");
@@ -209,6 +653,290 @@ function setInputValue(value) {
     updatePrediction();
 }
 
+function updateMicButtonUi() {
+    micBtn.classList.toggle("mic-active", isMicRecording);
+    micBtn.classList.toggle("mic-pending", isMicSubmitting);
+    micBtn.setAttribute("aria-pressed", isMicRecording ? "true" : "false");
+    if (isMicSubmitting) {
+        micBtn.title = "Transcribing microphone input";
+    } else {
+        micBtn.title = isMicRecording ? "Listening for speech" : "Enable microphone";
+    }
+}
+
+function setMicStatus(message = "") {
+    micStatus.textContent = message;
+}
+
+function clearMicSilenceTimeout() {
+    if (micSilenceTimeoutId) {
+        clearTimeout(micSilenceTimeoutId);
+        micSilenceTimeoutId = null;
+    }
+}
+
+function scheduleMicAutoStop(recordingToken) {
+    clearMicSilenceTimeout();
+    micSilenceTimeoutId = window.setTimeout(() => {
+        if (!isMicRecording || recordingToken !== micRecordingToken) {
+            return;
+        }
+        stopMicrophone({ autoSubmit: true });
+    }, MIC_AUTO_STOP_SILENCE_MS);
+}
+
+function cleanupMicrophone() {
+    if (micRecorder && micRecorder.state !== "inactive") {
+        micRecorder.stop();
+    }
+
+    if (micProcessorNode) {
+        micProcessorNode.disconnect();
+    }
+
+    if (micSourceNode) {
+        micSourceNode.disconnect();
+    }
+
+    if (micAudioContext) {
+        micAudioContext.close().catch(() => {});
+    }
+
+    if (micStream) {
+        micStream.getTracks().forEach((track) => track.stop());
+    }
+
+    micRecorder = null;
+    micStream = null;
+    micChunks = [];
+    micProcessorNode = null;
+    micSourceNode = null;
+    micAudioContext = null;
+    micPcmChunks = [];
+    micSpeechDetected = false;
+    clearMicSilenceTimeout();
+    isMicRecording = false;
+    micBtn.disabled = false;
+    updateMicButtonUi();
+}
+
+function downsampleBuffer(samples, sourceRate, targetRate) {
+    if (targetRate >= sourceRate) {
+        return samples;
+    }
+
+    const ratio = sourceRate / targetRate;
+    const outLength = Math.floor(samples.length / ratio);
+    const out = new Float32Array(outLength);
+    let sourceIndex = 0;
+
+    for (let i = 0; i < outLength; i++) {
+        const nextSourceIndex = Math.round((i + 1) * ratio);
+        let sum = 0;
+        let count = 0;
+
+        while (sourceIndex < nextSourceIndex && sourceIndex < samples.length) {
+            sum += samples[sourceIndex];
+            sourceIndex += 1;
+            count += 1;
+        }
+
+        out[i] = count ? (sum / count) : 0;
+    }
+
+    return out;
+}
+
+function encodePcmToWav(samples, sampleRate) {
+    const pcmData = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+        const s = Math.max(-1, Math.min(1, samples[i] || 0));
+        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+
+    const wavBuffer = new ArrayBuffer(44 + pcmData.length * 2);
+    const view = new DataView(wavBuffer);
+    const writeString = (offset, value) => {
+        for (let i = 0; i < value.length; i++) {
+            view.setUint8(offset + i, value.charCodeAt(i));
+        }
+    };
+
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + pcmData.length * 2, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, "data");
+    view.setUint32(40, pcmData.length * 2, true);
+
+    let offset = 44;
+    for (let i = 0; i < pcmData.length; i++, offset += 2) {
+        view.setInt16(offset, pcmData[i], true);
+    }
+
+    return new Blob([view], { type: "audio/wav" });
+}
+
+function buildWavBlobFromPcmChunks() {
+    if (!micPcmChunks.length) {
+        return null;
+    }
+
+    const totalLength = micPcmChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+    const merged = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of micPcmChunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+    }
+
+    const downsampled = downsampleBuffer(merged, micSampleRate, 16000);
+    return encodePcmToWav(downsampled, 16000);
+}
+
+async function submitRecordedSpeech(speechBlob, { filename = "speech.wav", autoSubmit = false } = {}) {
+    if (!speechBlob || !speechBlob.size) {
+        if (autoSubmit) {
+            setMicStatus("No speech detected.");
+        }
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("audio", speechBlob, filename);
+
+    isMicSubmitting = true;
+    micBtn.disabled = true;
+    const originalLabel = micBtn.textContent;
+    micBtn.textContent = "…";
+    updateMicButtonUi();
+    setMicStatus("Transcribing…");
+
+    try {
+        const response = await fetch(ROUTES.speechToText, {
+            method: "POST",
+            credentials: "include",
+            body: formData,
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload?.error || "Speech-to-text failed.");
+        }
+
+        const transcript = String(payload?.text || "").trim();
+        if (!transcript) {
+            setMicStatus("No speech detected.");
+            return;
+        }
+
+        setMicStatus(`Captured: “${transcript}”`);
+        if (autoSubmit) {
+            appendMessage(transcript, "user");
+
+            if (!questionHistory.length || questionHistory[questionHistory.length - 1] !== transcript) {
+                questionHistory.push(transcript);
+            }
+
+            historyCursor = -1;
+            setInputValue("");
+
+            const useProcessingPrelude = countWords(transcript) > PROCESSING_WORD_THRESHOLD;
+            queueProcessingCueForPrompt(transcript);
+            streamResponse(transcript, useProcessingPrelude);
+            return;
+        }
+
+        const existing = input.value.trim();
+        const nextPrompt = existing ? `${existing} ${transcript}` : transcript;
+        setInputValue(nextPrompt);
+        input.focus();
+    } catch (error) {
+        console.error("Unable to transcribe microphone input", error);
+        appendMessage(`Microphone error: ${error.message || "Unable to transcribe audio."}`, "assistant");
+        setMicStatus("Microphone transcription failed.");
+    } finally {
+        isMicSubmitting = false;
+        micBtn.textContent = originalLabel;
+        micBtn.disabled = false;
+        updateMicButtonUi();
+    }
+}
+
+async function startMicrophone() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+        appendMessage("Microphone is not supported in this browser.", "assistant");
+        return;
+    }
+
+    try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micPcmChunks = [];
+        micRecordingToken += 1;
+        micSpeechDetected = false;
+        clearMicSilenceTimeout();
+        micAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+        micSampleRate = micAudioContext.sampleRate;
+        micSourceNode = micAudioContext.createMediaStreamSource(micStream);
+        micProcessorNode = micAudioContext.createScriptProcessor(4096, 1, 1);
+        setMicStatus("Listening… start speaking.");
+
+        micProcessorNode.onaudioprocess = (event) => {
+            if (!isMicRecording) {
+                return;
+            }
+            const channelData = event.inputBuffer.getChannelData(0);
+            micPcmChunks.push(new Float32Array(channelData));
+
+            let sumSquares = 0;
+            for (let index = 0; index < channelData.length; index++) {
+                const sample = channelData[index];
+                sumSquares += sample * sample;
+            }
+
+            const rms = Math.sqrt(sumSquares / channelData.length);
+            if (rms >= MIC_SPEECH_THRESHOLD) {
+                micSpeechDetected = true;
+                clearMicSilenceTimeout();
+                setMicStatus("Listening…");
+                return;
+            }
+
+            if (micSpeechDetected && !micSilenceTimeoutId) {
+                setMicStatus("Speech captured. Waiting 2 seconds for more…");
+                scheduleMicAutoStop(micRecordingToken);
+            }
+        };
+
+        micSourceNode.connect(micProcessorNode);
+        micProcessorNode.connect(micAudioContext.destination);
+
+        isMicRecording = true;
+        updateMicButtonUi();
+    } catch (error) {
+        cleanupMicrophone();
+        appendMessage("Unable to access microphone. Please allow microphone permission.", "assistant");
+    }
+}
+
+function stopMicrophone({ autoSubmit = true } = {}) {
+    if (!isMicRecording) {
+        cleanupMicrophone();
+        return;
+    }
+
+    const wavBlob = buildWavBlobFromPcmChunks();
+    cleanupMicrophone();
+    submitRecordedSpeech(wavBlob, { filename: "speech.wav", autoSubmit });
+}
+
 function moveHistory(direction) {
     if (!questionHistory.length) return;
 
@@ -228,7 +956,7 @@ function moveHistory(direction) {
 
 async function loadQuestionHistory() {
     try {
-        const response = await fetch("/question-history");
+        const response = await fetch(ROUTES.questionHistory, { credentials: "include" });
         if (!response.ok) return;
 
         const payload = await response.json();
@@ -237,6 +965,22 @@ async function loadQuestionHistory() {
         }
     } catch (error) {
         console.warn("Unable to load question history", error);
+    }
+}
+
+async function announceSessionModel() {
+    try {
+        const response = await fetch(ROUTES.sessionInfo, { credentials: "include" });
+        if (!response.ok) {
+            return;
+        }
+
+        const payload = await response.json();
+        if (payload?.newSession && payload?.model) {
+            appendMessage(`Session started. Model in use: ${payload.model}`, "assistant");
+        }
+    } catch (error) {
+        console.warn("Unable to load session info", error);
     }
 }
 
@@ -322,10 +1066,20 @@ stopBtn.addEventListener("click", () => {
         currentStream.abort();
         currentStream = null;
     }
+    stopSpeechPlayback();
     isStreaming = false;
     setAvatarState(input.value.length ? "waiting" : "smiling");
     stopBtn.disabled = true;
     input.disabled = false;
+});
+
+micBtn.addEventListener("click", () => {
+    if (isMicRecording) {
+        stopMicrophone();
+        return;
+    }
+
+    startMicrophone();
 });
 
 async function uploadSelectedFile() {
@@ -339,8 +1093,9 @@ async function uploadSelectedFile() {
     uploadBtn.textContent = "Uploading...";
 
     try {
-        const response = await fetch("/upload", {
+        const response = await fetch(ROUTES.upload, {
             method: "POST",
+            credentials: "include",
             body: formData,
         });
 
@@ -414,18 +1169,21 @@ form.addEventListener("submit", function(e) {
     historyCursor = -1;
     setInputValue("");
 
-    streamResponse(message);
+    const useProcessingPrelude = countWords(message) > PROCESSING_WORD_THRESHOLD;
+    queueProcessingCueForPrompt(message);
+    streamResponse(message, useProcessingPrelude);
 });
 
 /* ---------------- Streaming ---------------- */
 
-function streamResponse(message) {
+function streamResponse(message, useProcessingPrelude = false) {
 
     const msg = document.createElement("div");
     msg.className = "message assistant";
 
     const bubble = document.createElement("div");
     bubble.className = "bubble";
+    const speakerButton = createSpeakerButton();
 
     // Typing indicator
     bubble.innerHTML = `
@@ -491,16 +1249,20 @@ function streamResponse(message) {
 
             if (cursorEl) cursorEl.remove();
 
+            const assistantText = textNode.nodeValue;
+
             // Render markdown once
-            const parsedHtml = marked.parse(textNode.nodeValue);
+            const parsedHtml = marked.parse(assistantText);
             const sanitizedHtml = DOMPurify.sanitize(parsedHtml, SANITIZE_CONFIG);
             bubble.innerHTML = sanitizedHtml;
+            bubble.appendChild(speakerButton);
 
             input.disabled = false;
             input.focus();
             stopBtn.disabled = true;
             setAvatarState("smiling");
 
+            cacheAssistantAudio(assistantText, speakerButton, useProcessingPrelude);
             resetUi();
         }
 
@@ -511,8 +1273,9 @@ function streamResponse(message) {
         }
     };
 
-    fetch("/stream", {
+    fetch(ROUTES.stream, {
         method: "POST",
+        credentials: "include",
         headers: {
             "Content-Type": "application/json",
         },
@@ -586,7 +1349,10 @@ function streamResponse(message) {
 updateInputHeight();
 updatePrediction();
 loadQuestionHistory().then(updatePrediction);
+announceSessionModel();
+warmProcessingSpeechCache();
 setAvatarState("smiling");
+updateMicButtonUi();
 </script>
 
 </body>

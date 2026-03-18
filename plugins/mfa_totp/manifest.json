@@ -1,0 +1,11 @@
+{
+  "id": "mfa_totp",
+  "name": "MFA TOTP Plugin",
+  "version": "0.1.0",
+  "plugin_api_version": "1.0",
+  "entrypoint": "plugins.mfa_totp.plugin:Plugin",
+  "description": "Recommended plugin skeleton for TOTP second-factor and recovery-code flow.",
+  "required_config_keys": ["issuer_name", "secret_store_path", "recovery_codes_path"],
+  "permissions": ["filesystem", "messaging"],
+  "enabled": false
+}
