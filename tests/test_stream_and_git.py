@@ -14,6 +14,9 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         cls.main = module
         cls.client = module.app.test_client()
 
+    def setUp(self):
+        self.main._rate_limit_events["git"].clear()
+
     def test_stream_rejects_missing_message(self):
         response = self.client.post("/stream", json={})
 
@@ -129,6 +132,11 @@ class StreamAndGitEndpointTests(unittest.TestCase):
             ),
             mock.patch.object(self.main, "_index_git_repository", return_value=(3, 8)) as index_repo,
         ):
+            self.client.post("/stream", json={"message": "/face-enroll demo-token"})
+            self.client.post(
+                "/stream",
+                json={"message": "/face-verify demo-token --liveness=pass"},
+            )
             response = self.client.post(
                 "/stream",
                 json={"message": "/git https://example.com/repo.git"},
