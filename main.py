@@ -724,7 +724,11 @@ HELP_MESSAGE = """Available commands:
 - /clear: Clear uploaded knowledge/context for your current session.
 - /vectordb: Show in-memory vector database statistics.
 - /git <repository-url>: Clone and index a repository for RAG queries in this session.
-- /weather [location]: Example plugin command served through the plugin manager."""
+- /weather [location]: Example plugin command served through the plugin manager.
+- /face-enroll <token>: Enroll step-up token for sensitive commands.
+- /face-verify <token>: Activate step-up window for sensitive commands.
+- /face-status: Show current face-verify status.
+- /face-clear: Remove enrolled face-verify state for this session."""
 
 GIT_TEXT_EXTENSIONS = {
     ".txt", ".md", ".rst", ".adoc", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
@@ -744,14 +748,27 @@ QUESTION_HISTORY_FILE = Path(
 )
 PLUGIN_TRUSTED_ALLOWLIST = {
     plugin_id.strip()
-    for plugin_id in os.environ.get("PLUGIN_TRUSTED_ALLOWLIST", "weather").split(",")
+    for plugin_id in os.environ.get("PLUGIN_TRUSTED_ALLOWLIST", "weather,face_verify").split(",")
     if plugin_id.strip()
 }
 HOLLY_PLUGIN_CONFIG = {
     "plugins": {
         "weather": {
             "provider": os.environ.get("HOLLY_WEATHER_PROVIDER", "demo").strip() or "demo",
-        }
+        },
+        "face_verify": {
+            "store_path": os.environ.get(
+                "HOLLY_FACE_VERIFY_STORE_PATH",
+                str(Path(__file__).with_name("face_verify_store.json")),
+            ).strip() or str(Path(__file__).with_name("face_verify_store.json")),
+            "verify_ttl_seconds": int(os.environ.get("HOLLY_FACE_VERIFY_TTL_SECONDS", "300")),
+            "sensitive_commands": [
+                part.strip()
+                for part in os.environ.get("HOLLY_FACE_VERIFY_SENSITIVE_COMMANDS", "/git").split(",")
+                if part.strip()
+            ]
+            or ["/git"],
+        },
     }
 }
 HOLLY_APP_CONTEXT = {
@@ -1715,6 +1732,16 @@ def stream():
         if plugin_results:
             command_payload = plugin_results[0] or {}
             command_content = command_payload.get("content") or f"Plugin handled {command_name}."
+            if command_payload.get("deny"):
+                return Response(
+                    sse({"type": "error", "error": command_content}),
+                    status=403,
+                    mimetype="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
             return Response(
                 sse({"type": "token", "content": command_content}) + sse({"type": "done"}),
                 mimetype="text/event-stream",
@@ -1725,6 +1752,19 @@ def stream():
             )
 
     if user_message.startswith("/git"):
+        before_results = PLUGIN_MANAGER.dispatch_before_response(stream_context)
+        for result in before_results:
+            if isinstance(result, dict) and result.get("deny"):
+                return Response(
+                    sse({"type": "error", "error": result.get("content") or "Request blocked by policy plugin."}),
+                    status=403,
+                    mimetype="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+
         if not GIT_ENDPOINT_TOKEN:
             return Response(
                 sse({"type": "error", "error": "The /git endpoint is disabled by server configuration."}),
@@ -1868,7 +1908,13 @@ def stream():
 
             before_results = PLUGIN_MANAGER.dispatch_before_response(stream_context)
             for result in before_results:
-                prompt_prefix = result.get("prompt_prefix") if isinstance(result, dict) else None
+                if not isinstance(result, dict):
+                    continue
+                if result.get("deny"):
+                    denial_message = result.get("content") or "Request blocked by policy plugin."
+                    yield sse({"type": "error", "error": denial_message})
+                    return
+                prompt_prefix = result.get("prompt_prefix")
                 if prompt_prefix:
                     final_prompt = f"{prompt_prefix}\n\n{final_prompt}"
 
