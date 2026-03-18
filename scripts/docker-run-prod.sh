@@ -1,10 +1,12 @@
-./killme.sh holly5005
+#!/bin/bash
+CONTAINER_NAME=holly-prod
+./killme.sh $CONTAINER_NAME
 export QWEN_TTS_API_BASE=http://quick-piper-endpoint:8092
 docker run -d \
+-p 6000:5000 \
 --restart unless-stopped \
---name holly5005 \
+--name $CONTAINER_NAME \
 --network tts-net \
--p 5005:5000 \
 -e WHISPER_CPP_STT_ENDPOINT="$WHISPER_CPP_STT_ENDPOINT" \
 -e SESSION_COOKIE_SECURE=false \
 -e TTS_MODE=qwen3 \
@@ -21,3 +23,4 @@ docker run -d \
 -e QWEN_TTS_VOICE=ryan \
 -e QWEN_TTS_LANGUAGE=english \
 holly-ux
+docker logs $CONTAINER_NAME -f
