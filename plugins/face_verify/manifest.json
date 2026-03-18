@@ -1,0 +1,11 @@
+{
+  "id": "face_verify",
+  "name": "Face Verify Plugin",
+  "version": "0.1.0",
+  "plugin_api_version": "1.0",
+  "entrypoint": "plugins.face_verify.plugin:Plugin",
+  "description": "Session-based step-up verification plugin with a face-token adapter interface.",
+  "required_config_keys": ["store_path", "verify_ttl_seconds", "sensitive_commands"],
+  "permissions": ["filesystem", "messaging"],
+  "enabled": true
+}

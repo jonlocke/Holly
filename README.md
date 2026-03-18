@@ -1,6 +1,6 @@
-# Clyde
+# Holly
 
-Clyde is an AI Agent.
+Holly is an AI Agent.
 
 ## Minimal setup (virtualenv)
 
@@ -29,7 +29,7 @@ pip install --require-hashes -r requirements.lock
 ```
 
 Commit `requirements.lock` whenever dependencies change.
-Clyde is an AI Agent
+Holly is an AI Agent
 
 ## Runtime configuration
 Both `main.py` and `main-cyberpunk.py` now read startup settings from environment variables:
@@ -39,8 +39,18 @@ Both `main.py` and `main-cyberpunk.py` now read startup settings from environmen
 - `PORT` (default: `5000`)
 - `OLLAMA_EMBED_MODEL` (default: `nomic-embed-text` for RAG embedding in `main.py`)
 - `OLLAMA_BEARER_TOKEN` (optional bearer token for Ollama/OpenAI-compatible endpoints that require `Authorization: Bearer ...`)
-- `OPENCLAW_AGENT_MODEL` (default: `agent:holly`; used as the chat `model` when bearer-token/OpenAI-compatible mode is enabled)
+- `OPENCLAW_AGENT_MODEL` (optional override; defaults to `OLLAMA_MODEL` and is used as the chat `model` when bearer-token/OpenAI-compatible mode is enabled)
 - `OPENCLAW_AGENT_ID` (default: `holly`; sent as `X-OpenClaw-Agent-Id` in bearer-token/OpenAI-compatible mode to force routing to that agent)
+- `OPENCLAW_SESSION_HEADER` (default: `X-OpenClaw-Session-Id`; sent with the Flask session id so OpenClaw can reuse one agent session across UX messages)
+- `CHAT_REQUEST_TIMEOUT_SECONDS` (optional; minimum/default: `120`; total timeout for chat generation requests to backend LLM endpoints)
+- `TTS_MODE` (optional; set `qwen3` to enable Qwen3 health-check + `/speak` behavior)
+- `QWEN_TTS_API_BASE` (optional; when set, enables a `/text-to-speech` proxy endpoint)
+- `QWEN_TTS_ENDPOINT_STYLE` (optional; default: `quick` → upstream path `/speak`; also supports `openai` → `/v1/audio/speech`, `legacy` → `/text-to-speech`; primarily used outside `TTS_MODE=qwen3`)
+- `QWEN_TTS_ENDPOINT` (optional; overrides endpoint style with an explicit upstream path; primarily used outside `TTS_MODE=qwen3`)
+- `TTS_UPSTREAM_TOTAL_TIMEOUT_SECONDS` (optional; default: `20`; strict total deadline for `/text-to-speech` upstream connect + response read before browser fallback is returned)
+- `WHISPER_CPP_STT_ENDPOINT` (optional; default: `http://127.0.0.1:9000/inference`; enables `/speech-to-text` proxy routing to whisper.cpp)
+- `STT_UPSTREAM_TOTAL_TIMEOUT_SECONDS` (optional; default: `60`; strict total deadline for `/speech-to-text` upstream connect + response read)
+- `STT_UPSTREAM_FILE_FIELD` (optional; default: `file`; multipart form field name used when forwarding audio to the STT backend)
 
 ### RAG embedding model
 
@@ -60,6 +70,30 @@ ollama pull nomic-embed-text
 - `/clear`: clears the current session knowledge base.
 - `/git <repository-url>`: clones a Git repository (for example `git@github.com:jonlocke/AImaster-linux.git`) and indexes repository text content into session RAG context.
 - `/vectordb`: shows in-memory vector store size (total indexed chunks) and open sessions with indexed chunk counts.
+
+### Plugin system
+
+Holly now supports a manifest-driven plugin system rooted at `/plugins`. Each plugin lives in its own directory and includes:
+
+- `manifest.json` with `id`, `name`, `version`, `plugin_api_version`, `entrypoint`, `description`, `required_config_keys`, `permissions`, and `enabled`.
+- A Python entrypoint class that exposes a strict contract: `id`, `version`, `on_load(app_context)`, `on_unload()`, plus optional hooks like `on_message`, `on_command`, `on_before_response`, and `on_after_response`.
+
+Example layout:
+
+```
+/plugins
+  /weather
+    manifest.json
+    plugin.py
+```
+
+The core `PluginManager` scans manifests recursively, validates plugin API compatibility, imports entrypoints, registers hooks through an internal event bus, enforces command uniqueness, isolates exceptions, and applies per-hook timeouts so one bad plugin does not crash Holly. The bundled `weather` plugin demonstrates `/weather [location]`.
+
+Runtime notes:
+
+- Configure plugin settings under the app's plugin config section. The bundled weather example uses `HOLLY_WEATHER_PROVIDER`.
+- Restrict trusted plugins with `PLUGIN_TRUSTED_ALLOWLIST=weather,another_plugin`.
+- Plugins can be enabled, disabled, and reloaded at runtime through `PluginManager`.
 
 ### Safe defaults
 - **Local development**: keep `HOST=127.0.0.1` and set `FLASK_DEBUG=1` when you need the Flask debugger/reloader.
@@ -82,6 +116,36 @@ python main.py
 Notes:
 - The app will call `POST /v1/chat/completions` when `OLLAMA_BEARER_TOKEN` is set.
 - `OLLAMA_API_BASE` can be either the gateway root (`http://127.0.0.1:18789`) or `/v1` base (`http://127.0.0.1:18789/v1`).
+- When `QWEN_TTS_API_BASE` is set, Holly exposes `POST /text-to-speech` and forwards JSON payloads to the configured Qwen TTS backend.
+  - In `TTS_MODE=qwen3`, Holly first checks `<QWEN_TTS_API_BASE>/health`.
+  - If `/health` is available, Holly sends TTS to `<QWEN_TTS_API_BASE>/speak`.
+  - If `/health` is unavailable/fails, Holly returns JSON fallback for browser speech: `{ "fallback": "browser_speak", "text": ... }`.
+  - Outside `TTS_MODE=qwen3`, routing follows `QWEN_TTS_ENDPOINT` / `QWEN_TTS_ENDPOINT_STYLE`.
+- Holly exposes `POST /speech-to-text`, receives microphone audio from the browser as PCM WAV (`audio/wav`), and forwards multipart form-data (`file` by default) to `WHISPER_CPP_STT_ENDPOINT` (for example a local whisper.cpp server).
+- The browser microphone control listens for speech, waits for a 2-second pause after detected speech, then automatically transcribes and submits the transcript to the chat backend.
+
+### TTS troubleshooting
+
+Recommended env for Qwen3 with health-check + `/speak` routing:
+
+```bash
+TTS_MODE=qwen3
+QWEN_TTS_API_BASE=http://192.168.1.154:8765
+```
+
+How to validate quickly:
+
+```bash
+curl -i http://192.168.1.154:8765/health
+curl -i -X POST http://127.0.0.1:5000/text-to-speech \
+  -H "Content-Type: application/json" \
+  -d '{"text":"TTS test from Holly"}'
+```
+
+Expected behavior:
+- If `/health` returns success, Holly sends TTS upstream to `/speak`.
+- If `/health` fails or is unreachable, Holly returns browser fallback JSON (`fallback: browser_speak`).
+- If you are not using `TTS_MODE=qwen3`, set `QWEN_TTS_ENDPOINT` or `QWEN_TTS_ENDPOINT_STYLE` for your provider route.
 
 ## Debian 13 package + systemd service
 
