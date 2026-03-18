@@ -1,14 +1,18 @@
+./killme.sh holly5005
+export QWEN_TTS_API_BASE=http://quick-piper-endpoint:8092
 docker run -d \
 --restart unless-stopped \
---name holly5015 \
--p 5015:5000 \
+--name holly5005 \
+--network tts-net \
+-p 5005:5000 \
+-e WHISPER_CPP_STT_ENDPOINT="$WHISPER_CPP_STT_ENDPOINT" \
 -e SESSION_COOKIE_SECURE=false \
 -e TTS_MODE=qwen3 \
 -e QWEN3_TTS_SPEAK_QUERY="$QWEN3_TTS_SPEAK_QUERY" \
 -e FRONTEND_TTS_AUTOPLAY=true \
 -e QWEN_TTS_TIMEOUT_SECONDS=360 \
 -e FLASK_DEBUG=1 \
--e OLLAMA_API_BASE="http://192.168.1.154:11434" \
+-e OLLAMA_API_BASE="$OLLAMA_API_BASE" \
 -e OLLAMA_MODEL="$OLLAMA_MODEL" \
 -e OLLAMA_BEARER_TOKEN="$OLLAMA_BEARER_TOKEN" \
 -e QWEN_TTS_API_BASE="$QWEN_TTS_API_BASE" \
