@@ -1,4 +1,5 @@
 ./killme.sh holly5005
+export QWEN_TTS_API_BASE=http://quick-piper-endpoint:8092
 docker run -d \
 --restart unless-stopped \
 --name holly5005 \

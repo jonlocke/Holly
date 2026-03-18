@@ -1,48 +1,39 @@
 #!/bin/bash
 set -e
+#set -x
 
-# --- Clean container ---
+# --- Clean up container ---
 sudo docker rm -f holly-test 2>/dev/null || true
 
-# --- Fetch latest ---
+# --- Update repo ---
 git fetch --all --prune
 
-# --- Get branch list (local + remote) ---
-mapfile -t branches < <(
-  git for-each-ref --format='%(refname:short)' refs/heads/ refs/remotes/origin/ \
-  | grep -v 'origin/HEAD' \
-  | sed 's|^origin/||' \
-  | sort -u
-)
+# --- Get branch list ---
+mapfile -t branches < <(git for-each-ref --format='%(refname:short)' refs/heads/)
 
 echo "Available branches:"
 for i in "${!branches[@]}"; do
   echo "$((i+1))) ${branches[$i]}"
 done
 
-# --- Prompt ---
+# --- Prompt user ---
 read -p "Select branch number to build: " choice
 
-# --- Validate ---
+# --- Validate input ---
 if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#branches[@]}" ]; then
   echo "Invalid selection"
   exit 1
 fi
 
 selected_branch="${branches[$((choice-1))]}"
-echo "Selected: $selected_branch"
+echo "Switching to branch: $selected_branch"
 
-# --- Switch or create tracking branch ---
-if git show-ref --verify --quiet "refs/heads/$selected_branch"; then
-  git switch "$selected_branch"
-else
-  echo "Creating local tracking branch for origin/$selected_branch"
-  git switch -c "$selected_branch" "origin/$selected_branch"
-fi
+# --- Switch branch ---
+git switch "$selected_branch"
 
-# --- Ensure fully up to date ---
-git pull --ff-only
+# Optional: pull latest for that branch
+git pull
 
-# --- Build + run ---
+# --- Build and run ---
 ./build-docker.sh
 ./docker-run-test.sh
