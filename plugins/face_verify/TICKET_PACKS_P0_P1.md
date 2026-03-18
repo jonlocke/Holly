@@ -16,6 +16,12 @@ FV-P0-001
 Title
 Define shared assurance contract and enums
 
+Second-pass delta from review
+- Enforce decision and risk_level enums as validated fields in the shared assurance contract where applicable.
+- Add explicit contract tests for invalid decision and invalid risk_level values.
+- Document how decision and risk_level are represented in policy payloads versus assurance payloads to avoid ambiguity.
+- Keep one canonical schema source in plugins/shared_assurance.py and remove any duplicate enum declarations elsewhere.
+
 Description
 Create one canonical assurance contract shared by face_verify and acl_rbac. This contract must define required fields and enum values so policy evaluation is deterministic and auditable.
 
@@ -41,6 +47,8 @@ Test checklist
 - Unit test valid assurance payload passes
 - Unit test missing required field fails
 - Unit test invalid enum value fails
+- Unit test invalid decision enum fails
+- Unit test invalid risk_level enum fails
 - Integration test face_verify output accepted by acl_rbac without transformation errors
 
 Acceptance criteria
@@ -61,6 +69,12 @@ FV-P0-002
 Title
 Implement authoritative command risk map
 
+Second-pass delta from review
+- Add explicit critical-tier mappings for highest-impact commands.
+- Include reboot-class and system-control examples as explicit mapped entries.
+- Add a clear, tested unknown-command default behavior contract.
+- Add policy-tier profile hook coverage so risk tier selection is visible and deterministic.
+
 Description
 Create a single source of truth for command-to-risk mapping used by acl_rbac. This must classify commands into low medium high critical with deterministic default behavior.
 
@@ -80,8 +94,10 @@ Implementation checklist
 Test checklist
 - Unit test each mapped command returns expected risk
 - Unit test unknown command follows default policy
+- Unit test explicit critical-tier commands resolve to critical
 - Integration test risk tier influences policy branch
 - Regression test for deny-first precedence with risk mapping
+- Regression test medium-risk path does not require face assurance when not policy-required
 
 Acceptance criteria
 - Every evaluated command has deterministic risk
@@ -100,6 +116,11 @@ Ticket
 FV-P0-003
 Title
 Enforce authorization boundary with acl_rbac as sole gate
+
+Second-pass delta from review
+- Preserve current separation: face_verify emits assurance signals only; acl_rbac remains final authorization gate.
+- Reduce cross-plugin coupling by avoiding direct acl_rbac fallback calls into face_verify runtime where practical.
+- Prefer a single assurance injection path in context for deterministic policy evaluation.
 
 Description
 Guarantee that face_verify cannot directly authorize sensitive command execution. acl_rbac must remain the only final allow/deny decision point.
@@ -324,6 +345,12 @@ P0 definition of done
 - P0-1, P0-2, P0-3 merged
 - Tests passing for contract, risk map, and authorization boundary
 - No behavior regressions in existing command routing
+
+P0 second-pass validation gate
+- Contract validation enforces all agreed enums used in policy decisions, including decision and risk_level when present.
+- Risk map includes explicit high and critical examples, with unknown-command default covered by tests.
+- Boundary tests verify acl_rbac is the sole final gate for sensitive command execution.
+- Medium-risk behavior and high-risk face-assurance requirements are both covered by integration tests.
 
 P1 definition of done
 - Backend abstraction in place and InsightFace adapter wired
