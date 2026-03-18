@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY main.py ./
+COPY plugin_system.py ./
+COPY plugins ./plugins
 COPY templates ./templates
 COPY static ./static
 
