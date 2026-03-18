@@ -20,6 +20,8 @@ from urllib import error as urllib_error
 from werkzeug.middleware.proxy_fix import ProxyFix
 from math import sqrt
 
+from plugin_system import PLUGIN_API_VERSION, PluginManager
+
 app = Flask(__name__)
 # Honor reverse-proxy headers (X-Forwarded-Proto, X-Forwarded-Prefix, etc.)
 # so url_for() generates prefix-aware routes when mounted under /test.
@@ -721,7 +723,8 @@ HELP_MESSAGE = """Available commands:
 - /models: List currently available models.
 - /clear: Clear uploaded knowledge/context for your current session.
 - /vectordb: Show in-memory vector database statistics.
-- /git <repository-url>: Clone and index a repository for RAG queries in this session."""
+- /git <repository-url>: Clone and index a repository for RAG queries in this session.
+- /weather [location]: Example plugin command served through the plugin manager."""
 
 GIT_TEXT_EXTENSIONS = {
     ".txt", ".md", ".rst", ".adoc", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
@@ -739,6 +742,30 @@ QUESTION_HISTORY_LIMIT = 200
 QUESTION_HISTORY_FILE = Path(
     os.environ.get("QUESTION_HISTORY_FILE", Path(__file__).with_name("question_history.json"))
 )
+PLUGIN_TRUSTED_ALLOWLIST = {
+    plugin_id.strip()
+    for plugin_id in os.environ.get("PLUGIN_TRUSTED_ALLOWLIST", "weather").split(",")
+    if plugin_id.strip()
+}
+HOLLY_PLUGIN_CONFIG = {
+    "plugins": {
+        "weather": {
+            "provider": os.environ.get("HOLLY_WEATHER_PROVIDER", "demo").strip() or "demo",
+        }
+    }
+}
+HOLLY_APP_CONTEXT = {
+    "app": app,
+    "config": HOLLY_PLUGIN_CONFIG,
+    "logger": logger,
+}
+PLUGIN_MANAGER = PluginManager(
+    Path(__file__).with_name("plugins"),
+    HOLLY_APP_CONTEXT,
+    trusted_plugins=PLUGIN_TRUSTED_ALLOWLIST,
+)
+LOADED_PLUGINS = PLUGIN_MANAGER.load_all_enabled()
+logger.info("Loaded %d plugin(s): %s", len(LOADED_PLUGINS), ", ".join(LOADED_PLUGINS) or "none")
 _rate_limit_lock = threading.Lock()
 _rate_limit_events: dict[str, dict[str, list[float]]] = {
     "stream": {},
@@ -1674,6 +1701,28 @@ def stream():
         )
 
     session_id = request_session_id
+    stream_context = {
+        "session_id": session_id,
+        "remote_addr": request.remote_addr,
+        "message": user_message,
+        "plugin_notes": [],
+    }
+    PLUGIN_MANAGER.dispatch_message(user_message, stream_context)
+
+    if user_message.startswith("/"):
+        command_name, *command_args = user_message.split()
+        plugin_results = PLUGIN_MANAGER.dispatch_command(command_name.lower(), command_args, stream_context)
+        if plugin_results:
+            command_payload = plugin_results[0] or {}
+            command_content = command_payload.get("content") or f"Plugin handled {command_name}."
+            return Response(
+                sse({"type": "token", "content": command_content}) + sse({"type": "done"}),
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
 
     if user_message.startswith("/git"):
         if not GIT_ENDPOINT_TOKEN:
@@ -1805,6 +1854,7 @@ def stream():
         )
 
     def generate():
+        response_chunks: list[str] = []
         try:
             context = _retrieve_context(session_id, user_message)
 
@@ -1816,9 +1866,17 @@ def stream():
                     f"{context}\n\nUser question: {user_message}"
                 )
 
+            before_results = PLUGIN_MANAGER.dispatch_before_response(stream_context)
+            for result in before_results:
+                prompt_prefix = result.get("prompt_prefix") if isinstance(result, dict) else None
+                if prompt_prefix:
+                    final_prompt = f"{prompt_prefix}\n\n{final_prompt}"
+
             for content in _stream_chat_tokens(final_prompt, session_id=session_id):
+                response_chunks.append(content)
                 yield sse({"type": "token", "content": content})
 
+            PLUGIN_MANAGER.dispatch_after_response("".join(response_chunks), stream_context)
             yield sse({"type": "done"})
 
         except RuntimeError as exc:
