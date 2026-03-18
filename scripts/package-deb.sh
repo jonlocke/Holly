@@ -55,9 +55,11 @@ mkdir -p "${DEBIAN_DIR}" "${APP_STAGE_DIR}" "${STAGE_ROOT}/lib/systemd/system" "
 
 # Copy runtime assets into the installed application directory.
 install -m 0644 "${REPO_ROOT}/main.py" "${APP_STAGE_DIR}/main.py"
+install -m 0644 "${REPO_ROOT}/plugin_system.py" "${APP_STAGE_DIR}/plugin_system.py"
 install -m 0644 "${REPO_ROOT}/requirements.txt" "${APP_STAGE_DIR}/requirements.txt"
 install -m 0644 "${REPO_ROOT}/README.md" "${APP_STAGE_DIR}/README.md"
 install -m 0644 "${REPO_ROOT}/LICENSE" "${APP_STAGE_DIR}/LICENSE"
+cp -a "${REPO_ROOT}/plugins" "${APP_STAGE_DIR}/plugins"
 cp -a "${REPO_ROOT}/templates" "${APP_STAGE_DIR}/templates"
 cp -a "${REPO_ROOT}/static" "${APP_STAGE_DIR}/static"
 
