@@ -287,3 +287,11 @@ Accepted ADRs
 20. Engineering kickoff
 Implementation backlog is maintained in
 - plugins/face_verify/IMPLEMENTATION_BACKLOG.md
+
+
+15. Implementation notes (current codebase)
+- Canonical assurance schema is implemented in plugins/shared_assurance.py and consumed by both face_verify and acl_rbac.
+- acl_rbac owns the command risk map and remains the final allow or deny gate for high-risk commands such as /git.
+- face_verify now depends on a backend interface with an InsightFace adapter skeleton entry point.
+- Mandatory liveness is enforced for every verify command.
+- Default step-up TTL is 120 seconds and high-risk policy checks treat expired assurance as invalid.

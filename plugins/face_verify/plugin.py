@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import hashlib
-import json
-import secrets
 import time
 from pathlib import Path
 from typing import Any
+
+from plugins.face_verify.backends.base import FaceBackend
+from plugins.face_verify.backends.insightface import InsightFaceBackend
+from plugins.shared_assurance import build_assurance_payload, reason_details
 
 
 class Plugin:
@@ -17,34 +18,26 @@ class Plugin:
         self.app_context: dict[str, Any] | None = None
         self.commands = {
             "/face-enroll": "Enroll a face token for the current session: /face-enroll <token>",
-            "/face-verify": "Verify face token for privileged actions: /face-verify <token>",
+            "/face-verify": "Verify face token for privileged actions: /face-verify <token> --liveness=pass",
             "/face-status": "Show current face verification status for this session.",
             "/face-clear": "Clear enrolled face token and verification cache for this session.",
         }
         self._store_path: Path | None = None
-        self._verify_ttl_seconds = 300
-        self._sensitive_commands: set[str] = {"/git"}
+        self._verify_ttl_seconds = 120
+        self._provider = "insightface"
+        self._backend: FaceBackend | None = None
 
     def on_load(self, app_context):
         self.app_context = app_context
-        config = (
-            (app_context or {})
-            .get("config", {})
-            .get("plugins", {})
-            .get("face_verify", {})
-        )
-
+        config = ((app_context or {}).get("config", {}).get("plugins", {}).get("face_verify", {}))
         self._store_path = Path(config.get("store_path", "face_verify_store.json"))
-        self._verify_ttl_seconds = int(config.get("verify_ttl_seconds", 300))
-        self._sensitive_commands = {
-            self._normalize_command(cmd)
-            for cmd in config.get("sensitive_commands", ["/git"])
-            if str(cmd).strip()
-        }
-        self._ensure_store_initialized()
+        self._verify_ttl_seconds = int(config.get("verify_ttl_seconds", 120))
+        self._provider = str(config.get("provider", "insightface")).strip().lower() or "insightface"
+        self._backend = self._build_backend()
 
     def on_unload(self):
         self.app_context = None
+        self._backend = None
 
     def on_command(self, command, args, context):
         command = self._normalize_command(command)
@@ -52,172 +45,104 @@ class Plugin:
 
         if command == "/face-enroll":
             if not args:
-                return {
-                    "type": "command_response",
-                    "command": command,
-                    "content": "Usage: /face-enroll <token>",
-                }
-
-            token = " ".join(args).strip()
+                return self._response(command, "Usage: /face-enroll <token>")
+            token = self._parse_token(args)
             if len(token) < 4:
-                return {
-                    "type": "command_response",
-                    "command": command,
-                    "content": "Token is too short. Use at least 4 characters.",
-                }
-
-            store = self._read_store()
-            salt = secrets.token_hex(16)
-            token_hash = self._hash_token(token, salt)
-            store.setdefault("sessions", {})[session_id] = {
-                "salt": salt,
-                "token_hash": token_hash,
-                "verified_until": 0,
-                "updated_at": int(time.time()),
-            }
-            self._write_store(store)
-
-            return {
-                "type": "command_response",
-                "command": command,
-                "content": "Face token enrolled for this session. Run /face-verify <token> before sensitive commands.",
-            }
+                return self._response(command, "Token is too short. Use at least 4 characters.")
+            assert self._backend is not None
+            self._backend.enroll(session_id, token)
+            return self._response(
+                command,
+                "Face token enrolled for this session. Run /face-verify <token> --liveness=pass before sensitive commands.",
+            )
 
         if command == "/face-verify":
             if not args:
-                return {
-                    "type": "command_response",
-                    "command": command,
-                    "content": "Usage: /face-verify <token>",
-                }
-
-            token = " ".join(args).strip()
-            store = self._read_store()
-            session_entry = store.get("sessions", {}).get(session_id)
-            if not session_entry:
-                return {
-                    "type": "command_response",
-                    "command": command,
-                    "content": "No enrollment found for this session. Run /face-enroll first.",
-                }
-
-            expected = session_entry.get("token_hash", "")
-            salt = session_entry.get("salt", "")
-            provided = self._hash_token(token, salt)
-            if not secrets.compare_digest(expected, provided):
-                return {
-                    "type": "command_response",
-                    "command": command,
-                    "content": "Face verification failed. Token did not match.",
-                }
-
-            verified_until = int(time.time()) + self._verify_ttl_seconds
-            session_entry["verified_until"] = verified_until
-            session_entry["updated_at"] = int(time.time())
-            self._write_store(store)
+                return self._response(command, "Usage: /face-verify <token> --liveness=pass")
+            token = self._parse_token(args)
+            liveness = self._parse_liveness(args)
+            assert self._backend is not None
+            result = self._backend.verify(session_id, token, liveness)
+            if not result.ok:
+                return self._response(command, reason_details(result.reason_code)["user_message"])
+            assurance = self.build_assurance(context)
+            message = f"Face verification successful. Step-up window active for {self._verify_ttl_seconds} seconds."
             return {
                 "type": "command_response",
                 "command": command,
-                "content": f"Face verification successful. Step-up window active for {self._verify_ttl_seconds} seconds.",
+                "content": message,
+                "assurance": assurance,
             }
 
         if command == "/face-status":
-            verified, seconds_remaining = self._is_verified(session_id)
-            if verified:
-                msg = f"Face verification active for this session ({seconds_remaining}s remaining)."
+            assert self._backend is not None
+            status = self._backend.status(session_id)
+            if status["verified"]:
+                msg = f"Face verification active for this session ({status['seconds_remaining']}s remaining)."
             else:
                 msg = "Face verification is not currently active for this session."
-            return {
-                "type": "command_response",
-                "command": command,
-                "content": msg,
-            }
+            return self._response(command, msg)
 
         if command == "/face-clear":
-            store = self._read_store()
-            removed = store.get("sessions", {}).pop(session_id, None)
-            self._write_store(store)
+            assert self._backend is not None
+            removed = self._backend.clear(session_id)
             msg = "Face session state cleared." if removed else "No face session state found."
-            return {
-                "type": "command_response",
-                "command": command,
-                "content": msg,
-            }
+            return self._response(command, msg)
 
         return None
 
     def on_before_response(self, context):
-        message = str((context or {}).get("message") or "").strip()
-        if not message.startswith("/"):
-            return None
-
-        command = self._normalize_command(message.split()[0])
-        if command not in self._sensitive_commands:
-            return None
-
-        session_id = self._session_id(context)
-        verified, _ = self._is_verified(session_id)
-        if verified:
-            return None
-
-        return {
-            "type": "policy",
-            "deny": True,
-            "content": (
-                "Step-up verification required before sensitive command. "
-                "Run /face-verify <token> first."
-            ),
-        }
+        context["face_assurance"] = self.build_assurance(context)
+        return None
 
     def on_after_response(self, response, context):
         return None
 
+    def build_assurance(self, context: dict[str, Any] | None) -> dict[str, Any]:
+        session_id = self._session_id(context)
+        now = int(time.time())
+        assert self._backend is not None
+        status = self._backend.status(session_id)
+        verified = bool(status["verified"])
+        expires_at = now + int(status["seconds_remaining"]) if verified else 0
+        reason_code = "verified" if verified else "assurance_missing"
+        return build_assurance_payload(
+            subject_id=str((context or {}).get("user_id") or session_id),
+            session_id=session_id,
+            factors_present=["face_verify"] if verified else [],
+            factor_freshness={"face_verify": expires_at if verified else 0},
+            face_score=0.99 if verified else 0.0,
+            liveness_status="pass" if verified else "unavailable",
+            assurance_level="high" if verified else "low",
+            expires_at=expires_at,
+            issuer=self.id,
+            model_version=getattr(self._backend, "model_version", self._provider),
+            reason_code=reason_code,
+        )
+
+    def _build_backend(self) -> FaceBackend:
+        if self._provider != "insightface":
+            raise ValueError(f"Unsupported face_verify provider '{self._provider}'.")
+        assert self._store_path is not None
+        return InsightFaceBackend(store_path=self._store_path, verify_ttl_seconds=self._verify_ttl_seconds)
+
+    def _response(self, command: str, content: str) -> dict[str, Any]:
+        return {"type": "command_response", "command": command, "content": content}
+
     def _session_id(self, context: dict[str, Any] | None) -> str:
         return str((context or {}).get("session_id") or "unknown")
-
-    def _ensure_store_initialized(self) -> None:
-        if not self._store_path:
-            return
-        self._store_path.parent.mkdir(parents=True, exist_ok=True)
-        if self._store_path.exists():
-            return
-        self._write_store({"sessions": {}})
-
-    def _read_store(self) -> dict[str, Any]:
-        if not self._store_path:
-            return {"sessions": {}}
-        try:
-            payload = json.loads(self._store_path.read_text(encoding="utf-8"))
-        except Exception:
-            payload = {"sessions": {}}
-        if not isinstance(payload, dict):
-            payload = {"sessions": {}}
-        payload.setdefault("sessions", {})
-        return payload
-
-    def _write_store(self, payload: dict[str, Any]) -> None:
-        if not self._store_path:
-            return
-        self._store_path.parent.mkdir(parents=True, exist_ok=True)
-        self._store_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def _hash_token(self, token: str, salt: str) -> str:
-        digest = hashlib.sha256(f"{salt}:{token}".encode("utf-8")).hexdigest()
-        return digest
-
-    def _is_verified(self, session_id: str) -> tuple[bool, int]:
-        now = int(time.time())
-        store = self._read_store()
-        session_entry = store.get("sessions", {}).get(session_id)
-        if not session_entry:
-            return False, 0
-        verified_until = int(session_entry.get("verified_until", 0))
-        if verified_until <= now:
-            return False, 0
-        return True, verified_until - now
 
     def _normalize_command(self, command: str) -> str:
         command = str(command or "").strip().lower()
         if command and not command.startswith("/"):
             command = f"/{command}"
         return command
+
+    def _parse_token(self, args: list[str]) -> str:
+        return " ".join(arg for arg in args if not str(arg).startswith("--liveness=")).strip()
+
+    def _parse_liveness(self, args: list[str]) -> str:
+        for arg in args:
+            if str(arg).startswith("--liveness="):
+                return str(arg).split("=", 1)[1].strip().lower() or "indeterminate"
+        return "unavailable"

@@ -748,7 +748,7 @@ QUESTION_HISTORY_FILE = Path(
 )
 PLUGIN_TRUSTED_ALLOWLIST = {
     plugin_id.strip()
-    for plugin_id in os.environ.get("PLUGIN_TRUSTED_ALLOWLIST", "weather,face_verify").split(",")
+    for plugin_id in os.environ.get("PLUGIN_TRUSTED_ALLOWLIST", "weather,face_verify,acl_rbac").split(",")
     if plugin_id.strip()
 }
 HOLLY_PLUGIN_CONFIG = {
@@ -761,13 +761,19 @@ HOLLY_PLUGIN_CONFIG = {
                 "HOLLY_FACE_VERIFY_STORE_PATH",
                 str(Path(__file__).with_name("face_verify_store.json")),
             ).strip() or str(Path(__file__).with_name("face_verify_store.json")),
-            "verify_ttl_seconds": int(os.environ.get("HOLLY_FACE_VERIFY_TTL_SECONDS", "300")),
+            "provider": os.environ.get("HOLLY_FACE_VERIFY_PROVIDER", "insightface").strip() or "insightface",
+            "verify_ttl_seconds": int(os.environ.get("HOLLY_FACE_VERIFY_TTL_SECONDS", "120")),
             "sensitive_commands": [
                 part.strip()
                 for part in os.environ.get("HOLLY_FACE_VERIFY_SENSITIVE_COMMANDS", "/git").split(",")
                 if part.strip()
             ]
             or ["/git"],
+        },
+        "acl_rbac": {
+            "policy_file_path": os.environ.get("HOLLY_ACL_RBAC_POLICY_FILE_PATH", "policy-inline").strip() or "policy-inline",
+            "default_role": os.environ.get("HOLLY_ACL_RBAC_DEFAULT_ROLE", "user").strip() or "user",
+            "fail_closed": os.environ.get("HOLLY_ACL_RBAC_FAIL_CLOSED", "1").strip().lower() in {"1", "true", "yes", "on"},
         },
     }
 }
@@ -781,6 +787,7 @@ PLUGIN_MANAGER = PluginManager(
     HOLLY_APP_CONTEXT,
     trusted_plugins=PLUGIN_TRUSTED_ALLOWLIST,
 )
+HOLLY_APP_CONTEXT["plugin_manager"] = PLUGIN_MANAGER
 LOADED_PLUGINS = PLUGIN_MANAGER.load_all_enabled()
 logger.info("Loaded %d plugin(s): %s", len(LOADED_PLUGINS), ", ".join(LOADED_PLUGINS) or "none")
 _rate_limit_lock = threading.Lock()
@@ -1752,19 +1759,6 @@ def stream():
             )
 
     if user_message.startswith("/git"):
-        before_results = PLUGIN_MANAGER.dispatch_before_response(stream_context)
-        for result in before_results:
-            if isinstance(result, dict) and result.get("deny"):
-                return Response(
-                    sse({"type": "error", "error": result.get("content") or "Request blocked by policy plugin."}),
-                    status=403,
-                    mimetype="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "X-Accel-Buffering": "no",
-                    },
-                )
-
         if not GIT_ENDPOINT_TOKEN:
             return Response(
                 sse({"type": "error", "error": "The /git endpoint is disabled by server configuration."}),
@@ -1826,6 +1820,42 @@ def stream():
             )
 
         repo_url = parts[1].strip()
+
+        try:
+            _validate_git_repo_url(repo_url)
+        except ValueError as exc:
+            return Response(
+                sse({"type": "error", "error": str(exc)}),
+                status=400,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        except RuntimeError as exc:
+            return Response(
+                sse({"type": "error", "error": str(exc)}),
+                status=502,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        before_results = PLUGIN_MANAGER.dispatch_before_response(stream_context)
+        for result in before_results:
+            if isinstance(result, dict) and result.get("deny"):
+                return Response(
+                    sse({"type": "error", "error": result.get("content") or "Request blocked by policy plugin."}),
+                    status=403,
+                    mimetype="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
 
         try:
             scanned_files, indexed_chunks = _index_git_repository(session_id, repo_url)
