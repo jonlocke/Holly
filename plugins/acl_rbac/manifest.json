@@ -1,0 +1,11 @@
+{
+  "id": "acl_rbac",
+  "name": "ACL RBAC Plugin",
+  "version": "0.1.0",
+  "plugin_api_version": "1.0",
+  "entrypoint": "plugins.acl_rbac.plugin:Plugin",
+  "description": "Recommended policy enforcement plugin skeleton for role and command authorization.",
+  "required_config_keys": ["policy_file_path", "default_role", "fail_closed"],
+  "permissions": ["filesystem", "messaging"],
+  "enabled": false
+}
