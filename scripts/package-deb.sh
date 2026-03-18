@@ -149,7 +149,10 @@ cat > "${DEBIAN_DIR}/postrm" <<'POSTRM'
 set -e
 
 APP_NAME="holly-ux"
+<<<<<<< HEAD
 SERVICE_NAME="${APP_NAME}.service"
+=======
+>>>>>>> 81f4d1b2207cd1ea161d4cf5d4f7b94b7115d2e6
 
 if command -v systemctl >/dev/null 2>&1; then
   if [[ "$1" == "remove" || "$1" == "purge" || "$1" == "failed-upgrade" || "$1" == "abort-install" || "$1" == "abort-upgrade" || "$1" == "disappear" ]]; then
