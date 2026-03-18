@@ -1,0 +1,11 @@
+{
+  "id": "auth_local",
+  "name": "Auth Local Plugin",
+  "version": "0.1.0",
+  "plugin_api_version": "1.0",
+  "entrypoint": "plugins.auth_local.plugin:Plugin",
+  "description": "Recommended plugin skeleton for local username/password auth and session identity.",
+  "required_config_keys": ["user_store_path", "session_ttl_minutes"],
+  "permissions": ["filesystem", "messaging"],
+  "enabled": false
+}
