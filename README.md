@@ -71,6 +71,30 @@ ollama pull nomic-embed-text
 - `/git <repository-url>`: clones a Git repository (for example `git@github.com:jonlocke/AImaster-linux.git`) and indexes repository text content into session RAG context.
 - `/vectordb`: shows in-memory vector store size (total indexed chunks) and open sessions with indexed chunk counts.
 
+### Plugin system
+
+Holly now supports a manifest-driven plugin system rooted at `/plugins`. Each plugin lives in its own directory and includes:
+
+- `manifest.json` with `id`, `name`, `version`, `plugin_api_version`, `entrypoint`, `description`, `required_config_keys`, `permissions`, and `enabled`.
+- A Python entrypoint class that exposes a strict contract: `id`, `version`, `on_load(app_context)`, `on_unload()`, plus optional hooks like `on_message`, `on_command`, `on_before_response`, and `on_after_response`.
+
+Example layout:
+
+```
+/plugins
+  /weather
+    manifest.json
+    plugin.py
+```
+
+The core `PluginManager` scans manifests recursively, validates plugin API compatibility, imports entrypoints, registers hooks through an internal event bus, enforces command uniqueness, isolates exceptions, and applies per-hook timeouts so one bad plugin does not crash Holly. The bundled `weather` plugin demonstrates `/weather [location]`.
+
+Runtime notes:
+
+- Configure plugin settings under the app's plugin config section. The bundled weather example uses `HOLLY_WEATHER_PROVIDER`.
+- Restrict trusted plugins with `PLUGIN_TRUSTED_ALLOWLIST=weather,another_plugin`.
+- Plugins can be enabled, disabled, and reloaded at runtime through `PluginManager`.
+
 ### Safe defaults
 - **Local development**: keep `HOST=127.0.0.1` and set `FLASK_DEBUG=1` when you need the Flask debugger/reloader.
 - **Deployment**: keep `FLASK_DEBUG=0`, bind to the required interface with `HOST` (often `0.0.0.0` in containers), and set `PORT` from your runtime environment.
