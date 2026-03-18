@@ -23,6 +23,15 @@ class HealthEndpointTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 405)
 
+    def test_home_page_includes_auto_submit_microphone_ui(self):
+        response = self.client.get("/")
+        page = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('id="mic-status"', page)
+        self.assertIn("MIC_AUTO_STOP_SILENCE_MS = 2000", page)
+        self.assertIn("Speech captured. Waiting 2 seconds for more…", page)
+
     def test_health_sets_explicit_media_src_in_csp(self):
         response = self.client.get("/health")
         csp = response.headers.get("Content-Security-Policy", "")

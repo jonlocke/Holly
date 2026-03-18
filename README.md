@@ -98,6 +98,7 @@ Notes:
   - If `/health` is unavailable/fails, Holly returns JSON fallback for browser speech: `{ "fallback": "browser_speak", "text": ... }`.
   - Outside `TTS_MODE=qwen3`, routing follows `QWEN_TTS_ENDPOINT` / `QWEN_TTS_ENDPOINT_STYLE`.
 - Holly exposes `POST /speech-to-text`, receives microphone audio from the browser as PCM WAV (`audio/wav`), and forwards multipart form-data (`file` by default) to `WHISPER_CPP_STT_ENDPOINT` (for example a local whisper.cpp server).
+- The browser microphone control listens for speech, waits for a 2-second pause after detected speech, then automatically transcribes and submits the transcript to the chat backend.
 
 ### TTS troubleshooting
 
