@@ -2,6 +2,7 @@ import importlib
 import ipaddress
 import os
 import unittest
+import uuid
 from unittest import mock
 
 
@@ -12,10 +13,42 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         module = importlib.import_module("main")
         module.app.config["TESTING"] = True
         cls.main = module
-        cls.client = module.app.test_client()
 
     def setUp(self):
+        self.client = self.main.app.test_client()
         self.main._rate_limit_events["git"].clear()
+
+    def _create_user_with_enrolled_face(self, username_prefix: str = "user") -> tuple[str, list[int]]:
+        username = f"{username_prefix}-{uuid.uuid4().hex[:8]}"
+        signature = [index % 256 for index in range(256)]
+        admin_login = self.client.post(
+            "/admin/login",
+            json={"username": "admin", "password": "adminpass123"},
+        )
+        self.assertEqual(admin_login.status_code, 200)
+        create_user = self.client.post(
+            "/admin/users",
+            json={"username": username, "display_name": username},
+        )
+        self.assertEqual(create_user.status_code, 201)
+        enroll = self.client.post(
+            "/face-capture",
+            json={"action": "enroll", "username": username, "signature": signature},
+        )
+        self.assertEqual(enroll.status_code, 200)
+        return username, signature
+
+    def _login_user_with_face(self, username: str, signature: list[int]):
+        return self.client.post(
+            "/face-capture",
+            json={"action": "verify", "mode": "login", "username": username, "signature": signature, "liveness": "pass"},
+        )
+
+    def _step_up_user_with_face(self, username: str, signature: list[int]):
+        return self.client.post(
+            "/face-capture",
+            json={"action": "verify", "mode": "step_up", "username": username, "signature": signature, "liveness": "pass"},
+        )
 
     def test_stream_rejects_missing_message(self):
         response = self.client.post("/stream", json={})
@@ -79,19 +112,43 @@ class StreamAndGitEndpointTests(unittest.TestCase):
 
         self.assertEqual(timeout, 120.0)
 
-    def test_git_requires_configured_server_token(self):
+    def test_git_api_requires_configured_server_token(self):
+        api_client = self.main.app.test_client(use_cookies=False)
         with mock.patch.object(self.main, "GIT_ENDPOINT_TOKEN", ""):
-            response = self.client.post("/stream", json={"message": "/git https://example.com/repo.git"})
+            response = api_client.post("/stream", json={"message": "/git https://example.com/repo.git"})
 
         self.assertEqual(response.status_code, 503)
-        self.assertIn("disabled by server configuration", response.get_data(as_text=True))
+        self.assertIn("git api is disabled", response.get_data(as_text=True).lower())
 
-    def test_git_requires_authentication(self):
+    def test_git_api_requires_authentication(self):
+        api_client = self.main.app.test_client(use_cookies=False)
         with mock.patch.object(self.main, "GIT_ENDPOINT_TOKEN", "test-token"):
-            response = self.client.post("/stream", json={"message": "/git https://example.com/repo.git"})
+            response = api_client.post("/stream", json={"message": "/git https://example.com/repo.git"})
 
         self.assertEqual(response.status_code, 401)
         self.assertIn("Unauthorized", response.get_data(as_text=True))
+
+    def test_git_browser_session_relies_on_policy_not_token(self):
+        with (
+            mock.patch.object(self.main, "GIT_ENDPOINT_TOKEN", ""),
+            mock.patch.object(
+                self.main,
+                "_resolve_hostname_ips",
+                return_value=[ipaddress.ip_address("93.184.216.34")],
+            ),
+            mock.patch.object(self.main, "_index_git_repository", return_value=(3, 8)) as index_repo,
+        ):
+            username, signature = self._create_user_with_enrolled_face("browser-git")
+            self._login_user_with_face(username, signature)
+            self._step_up_user_with_face(username, signature)
+            response = self.client.post(
+                "/stream",
+                json={"message": "/git https://example.com/repo.git"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Indexed repository", response.get_data(as_text=True))
+        index_repo.assert_called_once()
 
     def test_git_rejects_urls_with_credentials(self):
         with mock.patch.object(self.main, "GIT_ENDPOINT_TOKEN", "test-token"):
@@ -113,10 +170,12 @@ class StreamAndGitEndpointTests(unittest.TestCase):
                 return_value=[ipaddress.ip_address("127.0.0.1")],
             ),
         ):
+            username, signature = self._create_user_with_enrolled_face("private-address")
+            self._login_user_with_face(username, signature)
+            self._step_up_user_with_face(username, signature)
             response = self.client.post(
                 "/stream",
                 json={"message": "/git https://example.com/repo.git"},
-                headers={"Authorization": "Bearer test-token"},
             )
 
         self.assertEqual(response.status_code, 400)
@@ -132,15 +191,12 @@ class StreamAndGitEndpointTests(unittest.TestCase):
             ),
             mock.patch.object(self.main, "_index_git_repository", return_value=(3, 8)) as index_repo,
         ):
-            self.client.post("/stream", json={"message": "/face-enroll demo-token"})
-            self.client.post(
-                "/stream",
-                json={"message": "/face-verify demo-token --liveness=pass"},
-            )
+            username, signature = self._create_user_with_enrolled_face("safe-git")
+            self._login_user_with_face(username, signature)
+            self._step_up_user_with_face(username, signature)
             response = self.client.post(
                 "/stream",
                 json={"message": "/git https://example.com/repo.git"},
-                headers={"X-Holly-Git-Token": "test-token"},
             )
 
         self.assertEqual(response.status_code, 200)

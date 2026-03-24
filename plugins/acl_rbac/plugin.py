@@ -11,8 +11,14 @@ class Plugin:
     version = "0.1.0"
     timeout_seconds = 1.0
 
+    # Canonical command-to-risk mapping for policy evaluation.
+    # Unknown commands fall back to DEFAULT_RISK_LEVEL to keep behavior deterministic.
     COMMAND_RISK_MAP = {
         "/git": "high",
+        "/reboot": "critical",
+        "/restart": "critical",
+        "/shutdown": "critical",
+        "/poweroff": "critical",
         "/face-enroll": "low",
         "/face-verify": "low",
         "/face-status": "low",

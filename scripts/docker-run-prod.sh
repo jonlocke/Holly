@@ -1,13 +1,24 @@
 #!/bin/bash
+set -euo pipefail
+
 CONTAINER_NAME=holly-prod
-./killme.sh $CONTAINER_NAME
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+DATA_DIR="${HOLLY_DATA_DIR:-${REPO_ROOT}/data/prod}"
+
+"${SCRIPT_DIR}/killme.sh" $CONTAINER_NAME || true
+mkdir -p "${DATA_DIR}"
+chmod 0777 "${DATA_DIR}"
 export QWEN_TTS_API_BASE=http://quick-piper-endpoint:8092
 docker run -d \
 -p 6000:5000 \
 --restart unless-stopped \
 --name $CONTAINER_NAME \
 --network tts-net \
+-v "${DATA_DIR}:/data" \
 -e WHISPER_CPP_STT_ENDPOINT="$WHISPER_CPP_STT_ENDPOINT" \
+-e HOLLY_IDENTITY_STORE_PATH=/data/identity_store.json \
+-e HOLLY_FACE_VERIFY_STORE_PATH=/data/face_verify_store.json \
 -e SESSION_COOKIE_SECURE=false \
 -e TTS_MODE=qwen3 \
 -e QWEN3_TTS_SPEAK_QUERY="$QWEN3_TTS_SPEAK_QUERY" \
@@ -23,4 +34,5 @@ docker run -d \
 -e QWEN_TTS_VOICE=ryan \
 -e QWEN_TTS_LANGUAGE=english \
 holly-ux
+echo "Persistent data dir: ${DATA_DIR}"
 docker logs $CONTAINER_NAME -f

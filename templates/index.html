@@ -36,12 +36,74 @@
             <button type="submit">Send</button>
             <button type="button" id="stop-btn" disabled>Stop</button>
             <button type="button" id="upload-btn" class="control-btn">Upload file</button>
+            <button type="button" id="face-verify-btn" class="control-btn">Verify Face</button>
+            <button type="button" id="logout-btn" class="control-btn">Logout</button>
             <button type="button" id="mic-btn" class="control-btn" aria-pressed="false" title="Enable microphone">🎤</button>
         </div>
         <div id="mic-status" class="mic-status" aria-live="polite"></div>
+        <div id="face-status" class="mic-status" aria-live="polite"></div>
 
         <input id="file-input" type="file" accept=".txt,.md,.csv,.json,.cpp,.cc,.cxx,.h,.hpp" />
     </form>
+</div>
+
+<div id="auth-gate" class="auth-gate">
+    <div class="auth-gate-card">
+        <h1>Face Sign-In</h1>
+        <p class="auth-gate-copy">Enter your username and verify your pre-enrolled face to unlock Holly.</p>
+        <div class="auth-gate-actions">
+            <input id="login-username-input" class="auth-input" type="text" placeholder="username" autocomplete="username" />
+            <button type="button" id="login-face-btn" class="control-btn">Verify Face To Sign In</button>
+            <button type="button" id="open-admin-btn" class="control-btn">Admin</button>
+        </div>
+        <div id="auth-gate-status" class="auth-gate-status" aria-live="polite"></div>
+    </div>
+</div>
+
+<div id="admin-modal" class="face-modal" hidden>
+    <div class="face-modal-card admin-modal-card" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title">
+        <div class="face-modal-header">
+            <h2 id="admin-modal-title">Admin Console</h2>
+            <button type="button" id="admin-close-btn" class="control-btn">Close</button>
+        </div>
+        <div class="admin-auth-row">
+            <input id="admin-username-input" class="auth-input" type="text" placeholder="admin username" autocomplete="username" />
+            <input id="admin-password-input" class="auth-input" type="password" placeholder="admin password" autocomplete="current-password" />
+            <button type="button" id="admin-login-btn" class="control-btn">Admin Login</button>
+        </div>
+        <div class="admin-create-row">
+            <input id="admin-create-username" class="auth-input" type="text" placeholder="new username" />
+            <input id="admin-create-display-name" class="auth-input" type="text" placeholder="display name" />
+            <button type="button" id="admin-create-user-btn" class="control-btn">Create User</button>
+        </div>
+        <div class="admin-enroll-row">
+            <input id="admin-enroll-username" class="auth-input" type="text" placeholder="username to enroll face" />
+            <button type="button" id="admin-enroll-face-btn" class="control-btn">Enroll Face For User</button>
+        </div>
+        <div id="admin-status" class="face-modal-status" aria-live="polite"></div>
+        <div id="admin-users-list" class="admin-users-list"></div>
+    </div>
+</div>
+
+<div id="face-modal" class="face-modal" hidden>
+    <div class="face-modal-card" role="dialog" aria-modal="true" aria-labelledby="face-modal-title">
+        <div class="face-modal-header">
+            <h2 id="face-modal-title">Camera Face Check</h2>
+            <button type="button" id="face-close-btn" class="control-btn">Close</button>
+        </div>
+        <p id="face-modal-copy" class="face-modal-copy">
+            Capture a live webcam frame to enroll or verify this browser session.
+        </p>
+        <div class="face-preview-frame">
+            <video id="face-video" class="face-video" autoplay playsinline muted></video>
+            <canvas id="face-canvas" class="face-canvas" width="160" height="160" hidden></canvas>
+        </div>
+        <div class="face-modal-actions">
+            <button type="button" id="face-capture-btn" class="control-btn">Capture</button>
+            <button type="button" id="face-cancel-btn" class="control-btn">Cancel</button>
+        </div>
+        <div id="face-modal-status" class="face-modal-status" aria-live="polite"></div>
+    </div>
 </div>
 
 <script>
@@ -66,6 +128,34 @@ const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
 const micBtn = document.getElementById("mic-btn");
 const micStatus = document.getElementById("mic-status");
+const faceVerifyBtn = document.getElementById("face-verify-btn");
+const logoutBtn = document.getElementById("logout-btn");
+const faceStatus = document.getElementById("face-status");
+const faceModal = document.getElementById("face-modal");
+const faceVideo = document.getElementById("face-video");
+const faceCanvas = document.getElementById("face-canvas");
+const faceCaptureBtn = document.getElementById("face-capture-btn");
+const faceCancelBtn = document.getElementById("face-cancel-btn");
+const faceCloseBtn = document.getElementById("face-close-btn");
+const faceModalStatus = document.getElementById("face-modal-status");
+const faceModalCopy = document.getElementById("face-modal-copy");
+const authGate = document.getElementById("auth-gate");
+const loginUsernameInput = document.getElementById("login-username-input");
+const loginFaceBtn = document.getElementById("login-face-btn");
+const authGateStatus = document.getElementById("auth-gate-status");
+const openAdminBtn = document.getElementById("open-admin-btn");
+const adminModal = document.getElementById("admin-modal");
+const adminCloseBtn = document.getElementById("admin-close-btn");
+const adminUsernameInput = document.getElementById("admin-username-input");
+const adminPasswordInput = document.getElementById("admin-password-input");
+const adminLoginBtn = document.getElementById("admin-login-btn");
+const adminCreateUsername = document.getElementById("admin-create-username");
+const adminCreateDisplayName = document.getElementById("admin-create-display-name");
+const adminCreateUserBtn = document.getElementById("admin-create-user-btn");
+const adminEnrollUsername = document.getElementById("admin-enroll-username");
+const adminEnrollFaceBtn = document.getElementById("admin-enroll-face-btn");
+const adminStatus = document.getElementById("admin-status");
+const adminUsersList = document.getElementById("admin-users-list");
 const asciiRainCanvas = document.getElementById("ascii-rain");
 const hollyAvatar = document.getElementById("holly-avatar");
 
@@ -176,11 +266,22 @@ let micSilenceTimeoutId = null;
 let micSpeechDetected = false;
 let micRecordingToken = 0;
 let isMicSubmitting = false;
+let faceStream = null;
+let faceCaptureMode = "enroll";
+let faceCapturePending = false;
+let faceCaptureUsername = "";
+let authState = null;
 const MIC_AUTO_STOP_SILENCE_MS = 2000;
 const MIC_SPEECH_THRESHOLD = 0.015;
 const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
 const ROUTES = {
     stream: appUrl("/stream"),
+    authStatus: appUrl("/auth-status"),
+    authLogout: appUrl("/auth/logout"),
+    adminLogin: appUrl("/admin/login"),
+    adminLogout: appUrl("/admin/logout"),
+    adminUsers: appUrl("/admin/users"),
+    faceCapture: appUrl("/face-capture"),
     upload: appUrl("/upload"),
     questionHistory: appUrl("/question-history"),
     sessionInfo: appUrl("/session-info"),
@@ -204,6 +305,234 @@ function countWords(text) {
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function setFaceStatus(message) {
+    faceStatus.textContent = message || "";
+}
+
+function setFaceModalStatus(message) {
+    faceModalStatus.textContent = message || "";
+}
+
+function setAuthGateStatus(message) {
+    authGateStatus.textContent = message || "";
+}
+
+function setAdminStatus(message) {
+    adminStatus.textContent = message || "";
+}
+
+function renderAdminUsers(users) {
+    if (!Array.isArray(users) || !users.length) {
+        adminUsersList.innerHTML = "<p class=\"auth-gate-copy\">No users yet.</p>";
+        return;
+    }
+    adminUsersList.innerHTML = users
+        .map((user) => `<div class="admin-user-row"><strong>${user.display_name}</strong> <span>@${user.username}</span> <span>${user.role}</span></div>`)
+        .join("");
+}
+
+function renderAuthState(nextAuthState) {
+    authState = nextAuthState;
+    const authenticated = Boolean(authState?.authenticated);
+    authGate.hidden = authenticated;
+    input.disabled = !authenticated || isStreaming;
+    faceVerifyBtn.hidden = !authenticated;
+    logoutBtn.hidden = !authenticated;
+    faceVerifyBtn.textContent = "Step-Up Face";
+    setFaceStatus(
+        authenticated
+            ? `Signed in as ${authState.user.display_name}. Step-up is ${authState.stepUpActive ? "active" : "inactive"}.`
+            : "Sign in with a pre-enrolled face to start chatting."
+    );
+}
+
+async function refreshAuthState() {
+    const response = await fetch(ROUTES.authStatus, { credentials: "include" });
+    const payload = await response.json();
+    renderAuthState(payload);
+    return payload;
+}
+
+async function ensureAuthenticatedSession() {
+    const current = await refreshAuthState();
+    if (!current?.authenticated) {
+        setAuthGateStatus("Your session expired. Sign in again to continue.");
+        if (currentStream) {
+            currentStream.abort();
+            currentStream = null;
+        }
+        return false;
+    }
+    return true;
+}
+
+async function loadAdminUsers() {
+    const response = await fetch(ROUTES.adminUsers, { credentials: "include" });
+    const payload = await response.json();
+    if (!response.ok) {
+        throw new Error(payload?.error || "Unable to load users.");
+    }
+    renderAdminUsers(payload.users);
+}
+
+function openAdminModal() {
+    adminModal.hidden = false;
+    document.body.classList.add("face-modal-open");
+    setAdminStatus("");
+}
+
+function closeAdminModal() {
+    adminModal.hidden = true;
+    if (faceModal.hidden) {
+        document.body.classList.remove("face-modal-open");
+    }
+}
+
+function stopFaceCamera() {
+    if (faceStream) {
+        for (const track of faceStream.getTracks()) {
+            track.stop();
+        }
+        faceStream = null;
+    }
+    faceVideo.srcObject = null;
+}
+
+function closeFaceModal() {
+    faceModal.hidden = true;
+    if (adminModal.hidden) {
+        document.body.classList.remove("face-modal-open");
+    }
+    faceCapturePending = false;
+    faceCaptureBtn.disabled = false;
+    faceCaptureBtn.textContent = "Capture";
+    setFaceModalStatus("");
+    stopFaceCamera();
+}
+
+async function openFaceModal(mode) {
+    if (!navigator.mediaDevices?.getUserMedia) {
+        appendMessage("Camera capture is not supported in this browser.", "assistant");
+        return;
+    }
+
+    faceCaptureMode = mode;
+    faceModal.hidden = false;
+    document.body.classList.add("face-modal-open");
+    if (mode === "login") {
+        faceModalCopy.textContent = `Verify the pre-enrolled face for ${faceCaptureUsername} to unlock the session.`;
+        faceCaptureBtn.textContent = "Capture To Sign In";
+    } else if (mode === "admin-enroll") {
+        faceModalCopy.textContent = `Capture a face frame to enroll ${faceCaptureUsername}.`;
+        faceCaptureBtn.textContent = "Capture For Enroll";
+    } else if (mode === "step_up") {
+        faceModalCopy.textContent = "Capture a fresh live face frame to unlock sensitive commands.";
+        faceCaptureBtn.textContent = "Capture For Step-Up";
+    } else {
+        faceModalCopy.textContent = mode === "enroll"
+            ? "Align your face in the frame, then capture to enroll this browser session."
+            : "Align your face in the frame, then capture to refresh face verification for this session.";
+        faceCaptureBtn.textContent = mode === "enroll" ? "Capture For Enroll" : "Capture For Verify";
+    }
+    setFaceModalStatus("Requesting camera permission…");
+
+    try {
+        faceStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: "user",
+                width: { ideal: 640 },
+                height: { ideal: 640 },
+            },
+            audio: false,
+        });
+        faceVideo.srcObject = faceStream;
+        await faceVideo.play();
+        setFaceModalStatus("Camera ready. Hold still and capture.");
+    } catch (error) {
+        closeFaceModal();
+        appendMessage("Unable to access the camera. Please allow webcam permission and try again.", "assistant");
+    }
+}
+
+function buildFaceSignatureFromVideo() {
+    const context = faceCanvas.getContext("2d", { willReadFrequently: true });
+    const videoWidth = faceVideo.videoWidth || 0;
+    const videoHeight = faceVideo.videoHeight || 0;
+    if (!videoWidth || !videoHeight) {
+        throw new Error("Camera frame is not ready yet.");
+    }
+
+    const side = Math.min(videoWidth, videoHeight);
+    const sourceX = Math.floor((videoWidth - side) / 2);
+    const sourceY = Math.floor((videoHeight - side) / 2);
+    context.drawImage(faceVideo, sourceX, sourceY, side, side, 0, 0, faceCanvas.width, faceCanvas.height);
+
+    const imageData = context.getImageData(0, 0, faceCanvas.width, faceCanvas.height).data;
+    const signature = [];
+    for (let index = 0; index < imageData.length; index += 4) {
+        const red = imageData[index];
+        const green = imageData[index + 1];
+        const blue = imageData[index + 2];
+        const luminance = Math.round(0.2126 * red + 0.7152 * green + 0.0722 * blue);
+        signature.push(luminance);
+    }
+    return signature;
+}
+
+async function submitFaceCapture() {
+    if (faceCapturePending) {
+        return;
+    }
+
+    faceCapturePending = true;
+    faceCaptureBtn.disabled = true;
+    setFaceModalStatus(faceCaptureMode === "enroll" ? "Capturing enrollment frame…" : "Capturing verification frame…");
+
+    try {
+        const signature = buildFaceSignatureFromVideo();
+        const response = await fetch(ROUTES.faceCapture, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                action: faceCaptureMode === "admin-enroll" ? "enroll" : "verify",
+                mode: faceCaptureMode,
+                liveness: "pass",
+                username: faceCaptureUsername || undefined,
+                signature,
+            }),
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload?.error || payload?.content || "Face capture failed.");
+        }
+
+        setFaceStatus(payload?.content || "");
+        appendMessage(payload?.content || "Face capture complete.", "assistant");
+        if (payload?.auth) {
+            renderAuthState(payload.auth);
+        } else {
+            await refreshAuthState();
+        }
+        if (payload?.users) {
+            renderAdminUsers(payload.users);
+        } else if (authState?.adminAuthenticated && !adminModal.hidden) {
+            await loadAdminUsers();
+        }
+        if (faceCaptureMode === "admin-enroll" && faceCaptureUsername) {
+            setAdminStatus(`Face enrolled for ${faceCaptureUsername}.`);
+        }
+        closeFaceModal();
+    } catch (error) {
+        faceCapturePending = false;
+        faceCaptureBtn.disabled = false;
+        setFaceModalStatus(error.message || "Face capture failed.");
+    }
 }
 
 function createAudioChunksCache(chunks) {
@@ -1082,6 +1411,142 @@ micBtn.addEventListener("click", () => {
     startMicrophone();
 });
 
+faceVerifyBtn.addEventListener("click", async () => {
+    const authenticated = await ensureAuthenticatedSession();
+    if (!authenticated) {
+        return;
+    }
+    faceCaptureUsername = authState.user.username;
+    openFaceModal("step_up");
+});
+
+logoutBtn.addEventListener("click", async () => {
+    try {
+        const response = await fetch(ROUTES.authLogout, {
+            method: "POST",
+            credentials: "include",
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload?.error || "Logout failed.");
+        }
+        renderAuthState(payload);
+        setAuthGateStatus("You have been logged out. Sign in again to continue.");
+        setFaceStatus("Signed out.");
+    } catch (error) {
+        appendMessage(`Logout error: ${error.message || "Unable to log out."}`, "assistant");
+    }
+});
+
+faceCaptureBtn.addEventListener("click", () => {
+    submitFaceCapture();
+});
+
+faceCancelBtn.addEventListener("click", () => {
+    closeFaceModal();
+});
+
+faceCloseBtn.addEventListener("click", () => {
+    closeFaceModal();
+});
+
+faceModal.addEventListener("click", (event) => {
+    if (event.target === faceModal) {
+        closeFaceModal();
+    }
+});
+
+loginFaceBtn.addEventListener("click", () => {
+    const username = (loginUsernameInput.value || "").trim().toLowerCase();
+    if (!username) {
+        setAuthGateStatus("Enter a username first.");
+        return;
+    }
+    faceCaptureUsername = username;
+    setAuthGateStatus("");
+    openFaceModal("login");
+});
+
+openAdminBtn.addEventListener("click", () => {
+    openAdminModal();
+});
+
+adminCloseBtn.addEventListener("click", () => {
+    closeAdminModal();
+});
+
+adminModal.addEventListener("click", (event) => {
+    if (event.target === adminModal) {
+        closeAdminModal();
+    }
+});
+
+adminLoginBtn.addEventListener("click", async () => {
+    setAdminStatus("Signing in as admin…");
+    try {
+        const response = await fetch(ROUTES.adminLogin, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                username: adminUsernameInput.value.trim(),
+                password: adminPasswordInput.value,
+            }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload?.error || "Admin login failed.");
+        }
+        setAdminStatus(`Admin session active for ${payload.admin.username}.`);
+        renderAuthState(payload.auth);
+        await loadAdminUsers();
+    } catch (error) {
+        setAdminStatus(error.message || "Admin login failed.");
+    }
+});
+
+adminCreateUserBtn.addEventListener("click", async () => {
+    setAdminStatus("Creating user…");
+    try {
+        const response = await fetch(ROUTES.adminUsers, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                username: adminCreateUsername.value.trim(),
+                display_name: adminCreateDisplayName.value.trim(),
+            }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload?.error || "Unable to create user.");
+        }
+        adminEnrollUsername.value = payload.user.username;
+        renderAdminUsers(payload.users);
+        setAdminStatus(`Created user ${payload.user.username}.`);
+    } catch (error) {
+        setAdminStatus(error.message || "Unable to create user.");
+    }
+});
+
+adminEnrollFaceBtn.addEventListener("click", () => {
+    if (!authState?.adminAuthenticated) {
+        setAdminStatus("Admin session required.");
+        return;
+    }
+    const username = adminEnrollUsername.value.trim().toLowerCase();
+    if (!username) {
+        setAdminStatus("Enter the username to enroll.");
+        return;
+    }
+    faceCaptureUsername = username;
+    openFaceModal("admin-enroll");
+});
+
 async function uploadSelectedFile() {
     const file = fileInput.files?.[0];
     if (!file) return;
@@ -1154,8 +1619,13 @@ function appendMessage(content, role) {
 
 /* ---------------- Form Submit ---------------- */
 
-form.addEventListener("submit", function(e) {
+form.addEventListener("submit", async function(e) {
     e.preventDefault();
+
+    const authenticated = await ensureAuthenticatedSession();
+    if (!authenticated) {
+        return;
+    }
 
     const message = input.value.trim();
     if (!message) return;
@@ -1216,6 +1686,33 @@ function streamResponse(message, useProcessingPrelude = false) {
         stopBtn.disabled = true;
         currentStream = null;
         isStreaming = false;
+    };
+
+    const parseServerError = (rawText, status) => {
+        const body = String(rawText || "").trim();
+        if (!body) {
+            return `Request failed with status ${status}`;
+        }
+
+        const dataLines = body
+            .split("\n")
+            .filter((entry) => entry.startsWith("data:"));
+
+        if (dataLines.length) {
+            try {
+                const payload = dataLines
+                    .map((line) => line.slice(5).trim())
+                    .join("\n");
+                const parsed = JSON.parse(payload);
+                if (parsed?.error) {
+                    return parsed.error;
+                }
+            } catch (error) {
+                console.warn("Unable to parse SSE error payload.", error);
+            }
+        }
+
+        return body;
     };
 
     const handleEvent = (data) => {
@@ -1284,8 +1781,8 @@ function streamResponse(message, useProcessingPrelude = false) {
     })
         .then(async (response) => {
             if (!response.ok) {
-                const message = await response.text();
-                throw new Error(message || `Request failed with status ${response.status}`);
+                const rawBody = await response.text();
+                throw new Error(parseServerError(rawBody, response.status));
             }
 
             if (!response.body) {
@@ -1341,7 +1838,7 @@ function streamResponse(message, useProcessingPrelude = false) {
 
             handleEvent({
                 type: "error",
-                error: "Unable to stream response.",
+                error: error.message || "Unable to stream response.",
             });
         });
 }
@@ -1353,6 +1850,10 @@ announceSessionModel();
 warmProcessingSpeechCache();
 setAvatarState("smiling");
 updateMicButtonUi();
+refreshAuthState().catch((error) => {
+    console.warn("Unable to load auth status", error);
+    renderAuthState({ authenticated: false, adminAuthenticated: false, stepUpActive: false, user: null });
+});
 </script>
 
 </body>

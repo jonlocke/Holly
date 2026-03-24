@@ -2,9 +2,11 @@ import importlib
 import os
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 from plugin_system import PluginManager
+from plugins.acl_rbac.plugin import Plugin as AclRbacPlugin
 from plugins.shared_assurance import build_assurance_payload, validate_assurance_payload
 
 
@@ -50,6 +52,53 @@ class AssuranceContractTests(unittest.TestCase):
         self.assertIn("Invalid liveness_status", error)
 
 
+class AclRbacPolicyTests(unittest.TestCase):
+    def setUp(self):
+        self.plugin = AclRbacPlugin()
+
+    def test_known_high_and_critical_commands_are_explicitly_mapped(self):
+        self.assertEqual(self.plugin.command_risk("/git"), "high")
+        self.assertEqual(self.plugin.command_risk("/reboot"), "critical")
+        self.assertEqual(self.plugin.command_risk("/shutdown"), "critical")
+
+    def test_unknown_command_uses_deterministic_default_risk(self):
+        self.assertEqual(self.plugin.command_risk("/unknown-command"), self.plugin.DEFAULT_RISK_LEVEL)
+
+    def test_medium_risk_command_does_not_require_face_assurance(self):
+        result = self.plugin.on_before_response({"message": "/face-clear", "session_id": "session-1"})
+        self.assertIsNone(result)
+
+    def test_high_risk_command_denies_when_assurance_missing(self):
+        result = self.plugin.on_before_response({"message": "/git https://example.com/repo.git", "session_id": "session-1"})
+        self.assertTrue(result["deny"])
+        self.assertEqual(result["risk_level"], "high")
+        self.assertEqual(result["reason_code"], "invalid_assurance")
+
+    def test_high_risk_command_allows_valid_fresh_assurance(self):
+        future_expiry = 2_000_000_000
+        assurance = build_assurance_payload(
+            subject_id="user-1",
+            session_id="session-1",
+            factors_present=["face_verify"],
+            factor_freshness={"face_verify": future_expiry},
+            face_score=0.99,
+            liveness_status="pass",
+            assurance_level="high",
+            expires_at=future_expiry,
+            issuer="face_verify",
+            model_version="insightface-skeleton",
+            reason_code="verified",
+        )
+        result = self.plugin.on_before_response(
+            {
+                "message": "/git https://example.com/repo.git",
+                "session_id": "session-1",
+                "face_assurance": assurance,
+            }
+        )
+        self.assertIsNone(result)
+
+
 class FaceVerifyPluginIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -59,6 +108,32 @@ class FaceVerifyPluginIntegrationTests(unittest.TestCase):
 
     def setUp(self):
         self.client = self.main.app.test_client()
+
+    def _create_user_with_enrolled_face(self, username_prefix: str = "user") -> tuple[str, list[int]]:
+        username = f"{username_prefix}-{uuid.uuid4().hex[:8]}"
+        signature = [index % 256 for index in range(256)]
+        admin_login = self.client.post(
+            "/admin/login",
+            json={"username": "admin", "password": "adminpass123"},
+        )
+        self.assertEqual(admin_login.status_code, 200)
+        create_user = self.client.post(
+            "/admin/users",
+            json={"username": username, "display_name": username},
+        )
+        self.assertEqual(create_user.status_code, 201)
+        enroll = self.client.post(
+            "/face-capture",
+            json={"action": "enroll", "username": username, "signature": signature},
+        )
+        self.assertEqual(enroll.status_code, 200)
+        return username, signature
+
+    def _login_user_with_face(self, username: str, signature: list[int]):
+        return self.client.post(
+            "/face-capture",
+            json={"action": "verify", "mode": "login", "username": username, "signature": signature, "liveness": "pass"},
+        )
 
     def test_face_verify_commands_round_trip(self):
         enroll = self.client.post("/stream", json={"message": "/face-enroll demo-token"})
@@ -81,14 +156,14 @@ class FaceVerifyPluginIntegrationTests(unittest.TestCase):
         self.assertIn("Face verification active", status_after.get_data(as_text=True))
 
     def test_git_command_is_blocked_without_face_verification(self):
-        from unittest import mock
+        username, signature = self._create_user_with_enrolled_face("git-blocked")
+        login = self._login_user_with_face(username, signature)
+        self.assertEqual(login.status_code, 200)
 
-        with mock.patch.object(self.main, "GIT_ENDPOINT_TOKEN", "test-token"):
-            response = self.client.post(
-                "/stream",
-                json={"message": "/git https://github.com/octocat/Hello-World"},
-                headers={"X-Holly-Git-Token": "test-token"},
-            )
+        response = self.client.post(
+            "/stream",
+            json={"message": "/git https://github.com/octocat/Hello-World"},
+        )
         self.assertEqual(response.status_code, 403)
         self.assertIn("fresh face verification is required", response.get_data(as_text=True).lower())
 
@@ -107,6 +182,50 @@ class FaceVerifyPluginIntegrationTests(unittest.TestCase):
         response = self.client.post("/stream", json={"message": "/face-verify demo-token"})
         self.assertEqual(response.status_code, 200)
         self.assertIn("liveness was unavailable", response.get_data(as_text=True).lower())
+
+    def test_face_capture_enroll_and_verify_round_trip(self):
+        signature = [120] * 256
+
+        enroll = self.client.post("/face-capture", json={"action": "enroll", "signature": signature})
+        self.assertEqual(enroll.status_code, 400)
+
+        gradient_signature = [index % 256 for index in range(256)]
+        enroll = self.client.post("/face-capture", json={"action": "enroll", "signature": gradient_signature})
+        self.assertEqual(enroll.status_code, 200)
+        self.assertIn("Camera enrollment complete", enroll.get_json()["content"])
+
+        verify = self.client.post(
+            "/face-capture",
+            json={"action": "verify", "signature": gradient_signature, "liveness": "pass"},
+        )
+        self.assertEqual(verify.status_code, 200)
+        payload = verify.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertIn("Face verification successful", payload["content"])
+
+    def test_admin_can_create_user_enroll_face_and_sign_in(self):
+        username, signature = self._create_user_with_enrolled_face("login")
+        login = self._login_user_with_face(username, signature)
+        self.assertEqual(login.status_code, 200)
+        payload = login.get_json()
+        self.assertTrue(payload["auth"]["authenticated"])
+        self.assertEqual(payload["auth"]["user"]["username"], username)
+        self.assertIn("face match confidence", payload["content"].lower())
+
+    def test_signed_in_user_can_request_step_up_with_face(self):
+        username, signature = self._create_user_with_enrolled_face("step-up")
+        login = self._login_user_with_face(username, signature)
+        self.assertEqual(login.status_code, 200)
+
+        step_up = self.client.post(
+            "/face-capture",
+            json={"action": "verify", "mode": "step_up", "username": username, "signature": signature, "liveness": "pass"},
+        )
+        self.assertEqual(step_up.status_code, 200)
+        payload = step_up.get_json()
+        self.assertTrue(payload["auth"]["stepUpActive"])
+        self.assertIn("Step-up verification active", payload["content"])
+        self.assertIn("face match confidence", payload["content"].lower())
 
     def test_invalid_provider_fails_safe(self):
         with tempfile.TemporaryDirectory() as tmpdir:

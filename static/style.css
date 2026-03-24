@@ -400,6 +400,161 @@ textarea::placeholder {
     color: #1d4ed8;
 }
 
+#face-status {
+    min-height: 18px;
+}
+
+.auth-gate {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(15, 23, 42, 0.72);
+}
+
+.auth-gate[hidden] {
+    display: none;
+}
+
+.auth-gate-card,
+.admin-modal-card {
+    width: min(560px, 100%);
+}
+
+.auth-gate-card {
+    padding: 28px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.22);
+}
+
+.auth-gate-card h1 {
+    margin: 0 0 10px;
+    font-size: 28px;
+}
+
+.auth-gate-copy,
+.auth-gate-status {
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+.auth-gate-actions,
+.admin-auth-row,
+.admin-create-row,
+.admin-enroll-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 16px;
+}
+
+.auth-input {
+    flex: 1 1 180px;
+    min-height: 40px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    box-sizing: border-box;
+    font: inherit;
+}
+
+.auth-input:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+.admin-users-list {
+    margin-top: 18px;
+    display: grid;
+    gap: 8px;
+}
+
+.admin-user-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-muted);
+    font-size: 13px;
+}
+
+.face-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(17, 24, 39, 0.7);
+}
+
+.face-modal[hidden] {
+    display: none;
+}
+
+.face-modal-card {
+    width: min(520px, 100%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 20px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.face-modal-header,
+.face-modal-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.face-modal-header h2 {
+    margin: 0;
+    font-size: 20px;
+}
+
+.face-modal-copy,
+.face-modal-status {
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+.face-preview-frame {
+    margin: 16px 0;
+    width: 33%;
+    min-width: 140px;
+    max-width: 180px;
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background:
+        radial-gradient(circle at center, rgba(255, 255, 255, 0.08), transparent 55%),
+        linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.9));
+}
+
+.face-video {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    transform: scaleX(-1);
+}
+
+body.face-modal-open {
+    overflow: hidden;
+}
+
 /* ---------- Cursor ---------- */
 
 .cursor {
@@ -474,6 +629,7 @@ body.dark .assistant .bubble {
 
 body.dark .input-stack,
 body.dark textarea,
+body.dark .auth-input,
 body.dark .control-btn,
 body.dark .input-bar button {
     background: #111827;
@@ -576,6 +732,7 @@ body.cyberpunk .assistant .bubble {
 
 body.cyberpunk .input-stack,
 body.cyberpunk textarea,
+body.cyberpunk .auth-input,
 body.cyberpunk .control-btn,
 body.cyberpunk .input-bar button,
 body.cyberpunk .theme-btn {
@@ -653,9 +810,17 @@ body.cyberpunk .typing span {
 
     .primary-controls button,
     .secondary-controls button,
-    .input-bar input[type="file"] {
+    .input-bar input[type="file"],
+    .auth-gate-actions button,
+    .admin-auth-row button,
+    .admin-create-row button,
+    .admin-enroll-row button {
         width: 100%;
         max-width: 100%;
+    }
+
+    .auth-input {
+        width: 100%;
     }
 }
 
