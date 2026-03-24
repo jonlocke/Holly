@@ -66,22 +66,19 @@
             <h2 id="admin-modal-title">Admin Console</h2>
             <button type="button" id="admin-close-btn" class="control-btn">Close</button>
         </div>
-        <div class="admin-auth-row">
+        <div id="admin-auth-row" class="admin-auth-row">
             <input id="admin-username-input" class="auth-input" type="text" placeholder="admin username" autocomplete="username" />
             <input id="admin-password-input" class="auth-input" type="password" placeholder="admin password" autocomplete="current-password" />
             <button type="button" id="admin-login-btn" class="control-btn">Admin Login</button>
+            <button type="button" id="admin-logout-btn" class="control-btn" hidden>Admin Logout</button>
         </div>
-        <div class="admin-create-row">
-            <input id="admin-create-username" class="auth-input" type="text" placeholder="new username" />
-            <input id="admin-create-display-name" class="auth-input" type="text" placeholder="display name" />
+        <div id="admin-create-row" class="admin-create-row" hidden>
+            <input id="admin-create-username" class="auth-input auth-input-compact" type="text" placeholder="new username" />
+            <input id="admin-create-display-name" class="auth-input auth-input-compact" type="text" placeholder="display name" />
             <button type="button" id="admin-create-user-btn" class="control-btn">Create User</button>
         </div>
-        <div class="admin-enroll-row">
-            <input id="admin-enroll-username" class="auth-input" type="text" placeholder="username to enroll face" />
-            <button type="button" id="admin-enroll-face-btn" class="control-btn">Enroll Face For User</button>
-        </div>
         <div id="admin-status" class="face-modal-status" aria-live="polite"></div>
-        <div id="admin-users-list" class="admin-users-list"></div>
+        <div id="admin-users-list" class="admin-users-list" hidden></div>
     </div>
 </div>
 
@@ -146,14 +143,15 @@ const authGateStatus = document.getElementById("auth-gate-status");
 const openAdminBtn = document.getElementById("open-admin-btn");
 const adminModal = document.getElementById("admin-modal");
 const adminCloseBtn = document.getElementById("admin-close-btn");
+const adminAuthRow = document.getElementById("admin-auth-row");
 const adminUsernameInput = document.getElementById("admin-username-input");
 const adminPasswordInput = document.getElementById("admin-password-input");
 const adminLoginBtn = document.getElementById("admin-login-btn");
+const adminLogoutBtn = document.getElementById("admin-logout-btn");
+const adminCreateRow = document.getElementById("admin-create-row");
 const adminCreateUsername = document.getElementById("admin-create-username");
 const adminCreateDisplayName = document.getElementById("admin-create-display-name");
 const adminCreateUserBtn = document.getElementById("admin-create-user-btn");
-const adminEnrollUsername = document.getElementById("admin-enroll-username");
-const adminEnrollFaceBtn = document.getElementById("admin-enroll-face-btn");
 const adminStatus = document.getElementById("admin-status");
 const adminUsersList = document.getElementById("admin-users-list");
 const asciiRainCanvas = document.getElementById("ascii-rain");
@@ -329,17 +327,39 @@ function renderAdminUsers(users) {
         return;
     }
     adminUsersList.innerHTML = users
-        .map((user) => `<div class="admin-user-row"><strong>${user.display_name}</strong> <span>@${user.username}</span> <span>${user.role}</span></div>`)
+        .map(
+            (user) => `
+                <div class="admin-user-row">
+                    <div class="admin-user-meta">
+                        <strong>${user.display_name}</strong>
+                        <span>@${user.username}</span>
+                        <span>${user.role}</span>
+                    </div>
+                    <button
+                        type="button"
+                        class="control-btn admin-reenroll-btn"
+                        data-username="${user.username}"
+                    >
+                        Re-enroll Face
+                    </button>
+                </div>
+            `
+        )
         .join("");
 }
 
 function renderAuthState(nextAuthState) {
     authState = nextAuthState;
     const authenticated = Boolean(authState?.authenticated);
+    const adminAuthenticated = Boolean(authState?.adminAuthenticated);
     authGate.hidden = authenticated;
     input.disabled = !authenticated || isStreaming;
     faceVerifyBtn.hidden = !authenticated;
     logoutBtn.hidden = !authenticated;
+    adminAuthRow.hidden = adminAuthenticated;
+    adminCreateRow.hidden = !adminAuthenticated;
+    adminUsersList.hidden = !adminAuthenticated;
+    adminLogoutBtn.hidden = !adminAuthenticated;
     faceVerifyBtn.textContent = "Step-Up Face";
     setFaceStatus(
         authenticated
@@ -377,7 +397,15 @@ async function loadAdminUsers() {
     renderAdminUsers(payload.users);
 }
 
-function openAdminModal() {
+async function openAdminModal() {
+    try {
+        await refreshAuthState();
+        if (authState?.adminAuthenticated) {
+            await loadAdminUsers();
+        }
+    } catch (error) {
+        console.warn("Unable to refresh admin auth state", error);
+    }
     adminModal.hidden = false;
     document.body.classList.add("face-modal-open");
     setAdminStatus("");
@@ -1507,6 +1535,25 @@ adminLoginBtn.addEventListener("click", async () => {
     }
 });
 
+adminLogoutBtn.addEventListener("click", async () => {
+    setAdminStatus("Signing out admin session…");
+    try {
+        const response = await fetch(ROUTES.adminLogout, {
+            method: "POST",
+            credentials: "include",
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload?.error || "Admin logout failed.");
+        }
+        renderAuthState(payload.auth);
+        adminUsersList.innerHTML = "";
+        setAdminStatus("Admin session logged out.");
+    } catch (error) {
+        setAdminStatus(error.message || "Admin logout failed.");
+    }
+});
+
 adminCreateUserBtn.addEventListener("click", async () => {
     setAdminStatus("Creating user…");
     try {
@@ -1533,17 +1580,22 @@ adminCreateUserBtn.addEventListener("click", async () => {
     }
 });
 
-adminEnrollFaceBtn.addEventListener("click", () => {
+adminUsersList.addEventListener("click", (event) => {
+    const button = event.target.closest(".admin-reenroll-btn");
+    if (!button) {
+        return;
+    }
     if (!authState?.adminAuthenticated) {
         setAdminStatus("Admin session required.");
         return;
     }
-    const username = adminEnrollUsername.value.trim().toLowerCase();
+    const username = String(button.dataset.username || "").trim().toLowerCase();
     if (!username) {
-        setAdminStatus("Enter the username to enroll.");
+        setAdminStatus("Unable to determine the selected user.");
         return;
     }
     faceCaptureUsername = username;
+    setAdminStatus(`Ready to re-enroll face for ${username}.`);
     openFaceModal("admin-enroll");
 });
 

@@ -10,6 +10,10 @@
     --focus-ring: #2563eb;
 }
 
+[hidden] {
+    display: none !important;
+}
+
 body {
     margin: 0;
     padding: 16px;
@@ -381,6 +385,7 @@ textarea::placeholder {
     cursor: pointer;
     color: var(--text);
     box-sizing: border-box;
+    font-family: inherit;
 }
 
 .control-btn:hover,
@@ -435,6 +440,7 @@ textarea::placeholder {
 .auth-gate-card h1 {
     margin: 0 0 10px;
     font-size: 28px;
+    font-family: inherit;
 }
 
 .auth-gate-copy,
@@ -465,6 +471,22 @@ textarea::placeholder {
     font: inherit;
 }
 
+.auth-input-compact {
+    flex: 0 1 140px;
+    max-width: 180px;
+}
+
+.face-modal-header h2,
+.admin-user-row,
+.auth-gate-copy,
+.auth-gate-status,
+.face-modal-copy,
+.face-modal-status,
+.git-token-label,
+.mic-status {
+    font-family: inherit;
+}
+
 .auth-input:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
@@ -479,12 +501,24 @@ textarea::placeholder {
 .admin-user-row {
     display: flex;
     justify-content: space-between;
+    align-items: center;
     gap: 10px;
     padding: 10px 12px;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--surface-muted);
     font-size: 13px;
+    color: var(--text);
+}
+
+.admin-user-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.admin-reenroll-btn {
+    flex: 0 0 auto;
 }
 
 .face-modal {
@@ -749,6 +783,21 @@ body.cyberpunk .theme-btn:hover,
 body.cyberpunk .control-btn:hover,
 body.cyberpunk .input-bar button:hover {
     background: rgba(255, 46, 209, 0.2);
+}
+
+body.cyberpunk .auth-gate-card h1,
+body.cyberpunk .face-modal-header h2,
+body.cyberpunk .admin-user-row strong {
+    color: #ff7ce8;
+}
+
+body.cyberpunk .admin-user-row,
+body.cyberpunk .admin-user-row span,
+body.cyberpunk .auth-gate-copy,
+body.cyberpunk .auth-gate-status,
+body.cyberpunk .face-modal-copy,
+body.cyberpunk .face-modal-status {
+    color: #d67bff;
 }
 
 body.cyberpunk .cursor,
