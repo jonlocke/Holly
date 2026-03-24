@@ -112,6 +112,41 @@ class StreamAndGitEndpointTests(unittest.TestCase):
 
         self.assertEqual(timeout, 120.0)
 
+    def test_voice_lists_remote_tts_voices(self):
+        with (
+            mock.patch.dict(os.environ, {"QWEN_TTS_VOICE": "ryan"}, clear=False),
+            mock.patch.object(
+                self.main,
+                "_list_available_tts_voices",
+                return_value=("ryan", ["alloy", "ryan", "sarah"]),
+            ),
+        ):
+            response = self.client.post("/stream", json={"message": "/voice"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Configured voice: ryan", body)
+        self.assertIn("Available remote TTS voices:", body)
+        self.assertIn("- alloy", body)
+        self.assertIn("- sarah", body)
+
+    def test_voice_returns_fallback_message_when_remote_lookup_fails(self):
+        with (
+            mock.patch.dict(os.environ, {"QWEN_TTS_VOICE": "ryan"}, clear=False),
+            mock.patch.object(
+                self.main,
+                "_list_available_tts_voices",
+                side_effect=RuntimeError("TTS voices endpoint returned HTTP 404"),
+            ),
+        ):
+            response = self.client.post("/stream", json={"message": "/voice"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Configured voice: ryan", body)
+        self.assertIn("Unable to fetch available remote TTS voices.", body)
+        self.assertIn("HTTP 404", body)
+
     def test_git_api_requires_configured_server_token(self):
         api_client = self.main.app.test_client(use_cookies=False)
         with mock.patch.object(self.main, "GIT_ENDPOINT_TOKEN", ""):
