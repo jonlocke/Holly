@@ -1,9 +1,29 @@
 import importlib
 import ipaddress
+import json
 import os
 import unittest
 import uuid
 from unittest import mock
+
+
+class _FakeUrlopenResponse:
+    def __init__(self, body: bytes = b"", headers: dict | None = None, status: int = 200):
+        self._body = body
+        self.headers = headers or {}
+        self.status = status
+
+    def read(self) -> bytes:
+        return self._body
+
+    def close(self):
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
 class StreamAndGitEndpointTests(unittest.TestCase):
@@ -130,6 +150,34 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         self.assertIn("- alloy", body)
         self.assertIn("- sarah", body)
 
+    def test_voice_sets_session_tts_voice(self):
+        with mock.patch.object(
+            self.main,
+            "_list_available_tts_voices",
+            return_value=("ryan", ["alloy", "liz", "ryan"]),
+        ):
+            response = self.client.post("/stream", json={"message": "/voice liz"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Session TTS voice set to 'liz'.", body)
+
+        with self.client.session_transaction() as session_state:
+            self.assertEqual(session_state.get("tts_voice"), "liz")
+
+    def test_voice_rejects_unknown_voice_name(self):
+        with mock.patch.object(
+            self.main,
+            "_list_available_tts_voices",
+            return_value=("ryan", ["alloy", "liz", "ryan"]),
+        ):
+            response = self.client.post("/stream", json={"message": "/voice unknown"})
+
+        self.assertEqual(response.status_code, 400)
+        body = response.get_data(as_text=True)
+        self.assertIn("Unknown TTS voice 'unknown'.", body)
+        self.assertIn("Available voices:", body)
+
     def test_voice_returns_fallback_message_when_remote_lookup_fails(self):
         with (
             mock.patch.dict(os.environ, {"QWEN_TTS_VOICE": "ryan"}, clear=False),
@@ -146,6 +194,61 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         self.assertIn("Configured voice: ryan", body)
         self.assertIn("Unable to fetch available remote TTS voices.", body)
         self.assertIn("HTTP 404", body)
+
+    def test_text_to_speech_proxy_injects_selected_session_voice(self):
+        captured_payloads: list[dict] = []
+
+        def fake_urlopen(req, timeout=0):
+            if req.full_url == "http://tts.example/health":
+                return _FakeUrlopenResponse(b"{}")
+
+            captured_payloads.append(json.loads(req.data.decode("utf-8")))
+            return _FakeUrlopenResponse(b"RIFFdemo", headers={"Content-Type": "audio/wav"})
+
+        with (
+            self.client.session_transaction() as session_state,
+        ):
+            session_state["tts_voice"] = "liz"
+
+        with (
+            mock.patch.object(self.main, "TTS_MODE", "qwen3"),
+            mock.patch.object(self.main, "QWEN_TTS_HEALTH_URL", "http://tts.example/health"),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_speak_url", return_value="http://tts.example/speak"),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_stream_url", return_value="http://tts.example/speak-stream"),
+            mock.patch.object(self.main.urllib_request, "urlopen", side_effect=fake_urlopen),
+        ):
+            response = self.client.post("/text-to-speech", json={"text": "Hello world"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured_payloads[0]["voice"], "liz")
+        self.assertEqual(captured_payloads[0]["text"], "Hello world")
+
+    def test_text_to_speech_proxy_preserves_explicit_voice(self):
+        captured_payloads: list[dict] = []
+
+        def fake_urlopen(req, timeout=0):
+            if req.full_url == "http://tts.example/health":
+                return _FakeUrlopenResponse(b"{}")
+
+            captured_payloads.append(json.loads(req.data.decode("utf-8")))
+            return _FakeUrlopenResponse(b"RIFFdemo", headers={"Content-Type": "audio/wav"})
+
+        with (
+            self.client.session_transaction() as session_state,
+        ):
+            session_state["tts_voice"] = "liz"
+
+        with (
+            mock.patch.object(self.main, "TTS_MODE", "qwen3"),
+            mock.patch.object(self.main, "QWEN_TTS_HEALTH_URL", "http://tts.example/health"),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_speak_url", return_value="http://tts.example/speak"),
+            mock.patch.object(self.main, "_resolve_qwen3_tts_stream_url", return_value="http://tts.example/speak-stream"),
+            mock.patch.object(self.main.urllib_request, "urlopen", side_effect=fake_urlopen),
+        ):
+            response = self.client.post("/text-to-speech", json={"text": "Hello world", "voice": "alloy"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured_payloads[0]["voice"], "alloy")
 
     def test_git_api_requires_configured_server_token(self):
         api_client = self.main.app.test_client(use_cookies=False)

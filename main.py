@@ -805,7 +805,8 @@ GIT_ENDPOINT_TOKEN = os.environ.get("GIT_ENDPOINT_TOKEN", "").strip()
 HELP_MESSAGE = """Available commands:
 - /help: Show available slash commands and what they do.
 - /models: List currently available models.
-- /voice: List available remote TTS voices.
+- /voice: List available remote TTS voices and current session selection.
+- /voice <name>: Set the session TTS voice used for playback requests.
 - /clear: Clear uploaded knowledge/context for your current session.
 - /vectordb: Show in-memory vector database statistics.
 - /git <repository-url>: Clone and index a repository for RAG queries in this session.
@@ -1065,6 +1066,19 @@ def _current_step_up_expires_at() -> int:
         session.pop("step_up_expires_at", None)
         return 0
     return expires_at
+
+
+def _current_tts_voice() -> str | None:
+    voice = str(session.get("tts_voice") or "").strip()
+    return voice or None
+
+
+def _set_tts_voice(voice: str | None) -> None:
+    cleaned = str(voice or "").strip().lower()
+    if cleaned:
+        session["tts_voice"] = cleaned
+    else:
+        session.pop("tts_voice", None)
 
 
 def _set_authenticated_user(user: dict[str, Any]) -> None:
@@ -1666,6 +1680,9 @@ def text_to_speech_proxy():
             or payload.get("message")
             or ""
         ).strip()
+        selected_voice = _current_tts_voice()
+        if selected_voice and not payload.get("voice") and not payload.get("speaker"):
+            payload["voice"] = selected_voice
 
     stream_mode_requested = request.args.get("stream") == "1"
 
@@ -2016,8 +2033,11 @@ def stream():
             configured_voice, voices = _list_available_tts_voices()
         except Exception as exc:
             configured_voice = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_VOICE", ""))
+            selected_voice = _current_tts_voice()
             configured_line = f"Configured voice: {configured_voice}\n" if configured_voice else ""
+            selected_line = f"Selected session voice: {selected_voice}\n" if selected_voice else ""
             fallback = (
+                f"{selected_line}"
                 f"{configured_line}"
                 "Unable to fetch available remote TTS voices.\n"
                 f"Reason: {exc}"
@@ -2031,15 +2051,86 @@ def stream():
                 },
             )
 
+        selected_voice = _current_tts_voice()
         configured_line = f"Configured voice: {configured_voice}\n" if configured_voice else ""
+        selected_line = f"Selected session voice: {selected_voice}\n" if selected_voice else ""
         if voices:
             voice_lines = "\n".join(f"- {voice}" for voice in voices)
-            content = f"{configured_line}Available remote TTS voices:\n{voice_lines}"
+            content = f"{selected_line}{configured_line}Available remote TTS voices:\n{voice_lines}"
         else:
-            content = f"{configured_line}The remote TTS service did not return any voices."
+            content = f"{selected_line}{configured_line}The remote TTS service did not return any voices."
 
         return Response(
             sse({"type": "token", "content": content}) + sse({"type": "done"}),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    if user_message.startswith("/voice "):
+        requested_voice = user_message[len("/voice "):].strip().lower()
+        if not requested_voice:
+            return Response(
+                sse({"type": "error", "error": "Usage: /voice <name>"}),
+                status=400,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        if requested_voice in {"default", "clear", "reset"}:
+            _set_tts_voice(None)
+            configured_voice = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_VOICE", ""))
+            reset_message = (
+                f"Cleared session TTS voice selection. Using configured default '{configured_voice}'."
+                if configured_voice
+                else "Cleared session TTS voice selection."
+            )
+            return Response(
+                sse({"type": "token", "content": reset_message}) + sse({"type": "done"}),
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        try:
+            configured_voice, voices = _list_available_tts_voices()
+        except Exception as exc:
+            return Response(
+                sse({"type": "error", "error": f"Unable to fetch remote TTS voices before selecting one: {exc}"}),
+                status=502,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        normalized_voices = {voice.lower(): voice for voice in voices}
+        if requested_voice not in normalized_voices:
+            choices = ", ".join(sorted(normalized_voices)[:12]) if normalized_voices else "none"
+            return Response(
+                sse({"type": "error", "error": f"Unknown TTS voice '{requested_voice}'. Available voices: {choices}"}),
+                status=400,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        selected_voice = normalized_voices[requested_voice].lower()
+        _set_tts_voice(selected_voice)
+        configured_line = f" Configured default remains '{configured_voice}'." if configured_voice else ""
+        return Response(
+            sse({"type": "token", "content": f"Session TTS voice set to '{selected_voice}'.{configured_line}"})
+            + sse({"type": "done"}),
             mimetype="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
