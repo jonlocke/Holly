@@ -340,6 +340,18 @@ def _resolve_qwen_tts_health_url() -> str | None:
     return f"{base}/health"
 
 
+def _resolve_qwen_tts_voices_url() -> str | None:
+    base = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_API_BASE", "")).rstrip("/")
+    if not base:
+        return None
+    endpoint_path = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_VOICES_ENDPOINT", "/voices"))
+    if not endpoint_path:
+        endpoint_path = "/voices"
+    if not endpoint_path.startswith("/"):
+        endpoint_path = f"/{endpoint_path}"
+    return f"{base}{endpoint_path}"
+
+
 def _resolve_qwen3_tts_speak_url() -> str | None:
     base = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_API_BASE", "")).rstrip("/")
     if not base:
@@ -630,6 +642,69 @@ def _list_available_models() -> list[str]:
     return sorted(set(models))
 
 
+def _normalize_tts_voice_entries(payload: Any) -> list[str]:
+    if payload is None:
+        return []
+
+    if isinstance(payload, str):
+        cleaned = payload.strip()
+        return [cleaned] if cleaned else []
+
+    if isinstance(payload, list):
+        entries: list[str] = []
+        for item in payload:
+            entries.extend(_normalize_tts_voice_entries(item))
+        return entries
+
+    if isinstance(payload, dict):
+        for key in ("voices", "data", "items", "results", "speakers"):
+            if key in payload:
+                return _normalize_tts_voice_entries(payload.get(key))
+
+        for key in ("name", "id", "voice", "speaker"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return [value.strip()]
+
+    return []
+
+
+def _list_available_tts_voices() -> tuple[str | None, list[str]]:
+    voices_url = _resolve_qwen_tts_voices_url()
+    configured_voice = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_VOICE", ""))
+
+    if not voices_url:
+        raise RuntimeError("QWEN_TTS_API_BASE is not configured.")
+
+    try:
+        safe_url = _validate_outbound_http_url(voices_url)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid QWEN TTS voices URL: {exc}") from exc
+
+    req = urllib_request.Request(
+        safe_url,
+        method="GET",
+        headers={"Accept": "application/json"},
+    )
+
+    try:
+        with urllib_request.urlopen(req, timeout=10) as response:  # nosec B310 - URL is validated by _validate_outbound_http_url.
+            raw_payload = response.read().decode("utf-8", errors="ignore")
+    except urllib_error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"TTS voices endpoint returned HTTP {exc.code}: {body or exc.reason}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Unable to reach TTS voices endpoint: {exc}") from exc
+
+    try:
+        parsed_payload = json.loads(raw_payload) if raw_payload.strip() else []
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("TTS voices endpoint did not return valid JSON.") from exc
+
+    normalized_voices = sorted(set(_normalize_tts_voice_entries(parsed_payload)), key=str.lower)
+    return configured_voice or None, normalized_voices
+
+
 def _stream_chat_tokens(prompt: str, session_id: str | None = None):
     if OLLAMA_BEARER_TOKEN:
         endpoint = _validate_outbound_http_url(_openai_chat_completions_url())
@@ -730,6 +805,7 @@ GIT_ENDPOINT_TOKEN = os.environ.get("GIT_ENDPOINT_TOKEN", "").strip()
 HELP_MESSAGE = """Available commands:
 - /help: Show available slash commands and what they do.
 - /models: List currently available models.
+- /voice: List available remote TTS voices.
 - /clear: Clear uploaded knowledge/context for your current session.
 - /vectordb: Show in-memory vector database statistics.
 - /git <repository-url>: Clone and index a repository for RAG queries in this session.
@@ -1925,6 +2001,42 @@ def stream():
             )
         else:
             content = "No models were returned by the configured API endpoint."
+
+        return Response(
+            sse({"type": "token", "content": content}) + sse({"type": "done"}),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    if user_message == "/voice":
+        try:
+            configured_voice, voices = _list_available_tts_voices()
+        except Exception as exc:
+            configured_voice = _strip_wrapping_quotes(os.environ.get("QWEN_TTS_VOICE", ""))
+            configured_line = f"Configured voice: {configured_voice}\n" if configured_voice else ""
+            fallback = (
+                f"{configured_line}"
+                "Unable to fetch available remote TTS voices.\n"
+                f"Reason: {exc}"
+            )
+            return Response(
+                sse({"type": "token", "content": fallback}) + sse({"type": "done"}),
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        configured_line = f"Configured voice: {configured_voice}\n" if configured_voice else ""
+        if voices:
+            voice_lines = "\n".join(f"- {voice}" for voice in voices)
+            content = f"{configured_line}Available remote TTS voices:\n{voice_lines}"
+        else:
+            content = f"{configured_line}The remote TTS service did not return any voices."
 
         return Response(
             sse({"type": "token", "content": content}) + sse({"type": "done"}),
