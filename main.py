@@ -16,10 +16,12 @@ import socket
 from urllib.parse import urlparse
 from urllib import request as urllib_request
 from urllib import error as urllib_error
+from typing import Any
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 from math import sqrt
 
+from identity_store import IdentityStore
 from plugin_system import PLUGIN_API_VERSION, PluginManager
 
 app = Flask(__name__)
@@ -166,7 +168,7 @@ def _is_blocked_network_address(ip: ipaddress._BaseAddress) -> bool:
     )
 
 
-def _validate_git_repo_url(repo_url: str) -> str:
+def _validate_git_repo_url_format(repo_url: str) -> str:
     target = (repo_url or "").strip()
     if not target:
         raise ValueError("Repository URL is empty.")
@@ -189,6 +191,13 @@ def _validate_git_repo_url(repo_url: str) -> str:
         _ = parsed.port
     except ValueError as exc:
         raise ValueError(f"Repository URL port is invalid: {exc}") from exc
+
+    return target
+
+
+def _validate_git_repo_url_network(repo_url: str) -> str:
+    target = _validate_git_repo_url_format(repo_url)
+    parsed = urlparse(target)
 
     try:
         resolved_ips = _resolve_hostname_ips(parsed.hostname or "")
@@ -802,6 +811,25 @@ RATE_LIMIT_UPLOAD_MAX = int(os.environ.get("RATE_LIMIT_UPLOAD_MAX", "10"))
 RATE_LIMIT_UPLOAD_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_UPLOAD_WINDOW_SECONDS", "60"))
 RATE_LIMIT_GIT_MAX = int(os.environ.get("RATE_LIMIT_GIT_MAX", "3"))
 RATE_LIMIT_GIT_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_GIT_WINDOW_SECONDS", "600"))
+AUTH_SESSION_TTL_SECONDS = int(os.environ.get("HOLLY_AUTH_SESSION_TTL_SECONDS", "1800"))
+STEP_UP_TTL_SECONDS = int(os.environ.get("HOLLY_STEP_UP_TTL_SECONDS", "120"))
+ADMIN_SESSION_TTL_SECONDS = int(os.environ.get("HOLLY_ADMIN_SESSION_TTL_SECONDS", "3600"))
+IDENTITY_STORE = IdentityStore(
+    os.environ.get("HOLLY_IDENTITY_STORE_PATH", str(Path(__file__).with_name("identity_store.json")))
+)
+BOOTSTRAP_ADMIN_USERNAME = os.environ.get("HOLLY_BOOTSTRAP_ADMIN_USERNAME", "admin").strip() or "admin"
+BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("HOLLY_BOOTSTRAP_ADMIN_PASSWORD", "adminpass123").strip() or "adminpass123"
+if is_local_development() or os.environ.get("HOLLY_ENABLE_BOOTSTRAP_ADMIN", "1").strip().lower() in {"1", "true", "yes", "on"}:
+    try:
+        bootstrap_admin = IDENTITY_STORE.ensure_bootstrap_admin(BOOTSTRAP_ADMIN_USERNAME, BOOTSTRAP_ADMIN_PASSWORD)
+        logger.info("Bootstrap admin available as username=%s", bootstrap_admin["username"])
+    except ValueError as exc:
+        logger.warning("Unable to ensure bootstrap admin: %s", exc)
+logger.info(
+    "Persistent stores configured: identity_store=%s face_verify_store=%s",
+    os.environ.get("HOLLY_IDENTITY_STORE_PATH", str(Path(__file__).with_name("identity_store.json"))),
+    os.environ.get("HOLLY_FACE_VERIFY_STORE_PATH", str(Path(__file__).with_name("face_verify_store.json"))),
+)
 
 
 def _load_question_history() -> dict[str, list[str]]:
@@ -900,6 +928,11 @@ def _extract_git_auth_token() -> str:
     return ""
 
 
+def _has_session_cookie() -> bool:
+    session_cookie_name = app.config.get("SESSION_COOKIE_NAME", "session")
+    return bool(request.cookies.get(session_cookie_name))
+
+
 def _vector_store_stats() -> dict:
     with _vector_store_lock:
         sessions = {
@@ -923,6 +956,88 @@ def _get_session_id() -> str:
         session["session_id"] = session_id
         logger.info("Created new Flask session_id=%s", session_id)
     return session_id
+
+
+def _current_epoch_seconds() -> int:
+    return int(time.time())
+
+
+def _current_authenticated_user() -> dict[str, str | int] | None:
+    expires_at = int(session.get("auth_expires_at") or 0)
+    if expires_at <= _current_epoch_seconds():
+        for key in ("auth_user_id", "auth_username", "auth_display_name", "auth_role", "auth_expires_at", "step_up_expires_at"):
+            session.pop(key, None)
+        return None
+
+    user_id = session.get("auth_user_id")
+    username = session.get("auth_username")
+    role = session.get("auth_role")
+    if not user_id or not username or not role:
+        return None
+    return {
+        "user_id": str(user_id),
+        "username": str(username),
+        "display_name": str(session.get("auth_display_name") or username),
+        "role": str(role),
+        "expires_at": expires_at,
+    }
+
+
+def _current_step_up_expires_at() -> int:
+    expires_at = int(session.get("step_up_expires_at") or 0)
+    if expires_at <= _current_epoch_seconds():
+        session.pop("step_up_expires_at", None)
+        return 0
+    return expires_at
+
+
+def _set_authenticated_user(user: dict[str, Any]) -> None:
+    expires_at = _current_epoch_seconds() + AUTH_SESSION_TTL_SECONDS
+    session["auth_user_id"] = user["user_id"]
+    session["auth_username"] = user["username"]
+    session["auth_display_name"] = user["display_name"]
+    session["auth_role"] = user["role"]
+    session["auth_expires_at"] = expires_at
+    session["step_up_expires_at"] = 0
+
+
+def _set_step_up_verified() -> int:
+    expires_at = _current_epoch_seconds() + STEP_UP_TTL_SECONDS
+    session["step_up_expires_at"] = expires_at
+    return expires_at
+
+
+def _clear_authenticated_user() -> None:
+    for key in ("auth_user_id", "auth_username", "auth_display_name", "auth_role", "auth_expires_at", "step_up_expires_at"):
+        session.pop(key, None)
+
+
+def _is_admin_session_active() -> bool:
+    expires_at = int(session.get("admin_expires_at") or 0)
+    if expires_at <= _current_epoch_seconds():
+        session.pop("admin_user_id", None)
+        session.pop("admin_username", None)
+        session.pop("admin_expires_at", None)
+        return False
+    return True
+
+
+def _set_admin_session(user: dict[str, Any]) -> None:
+    session["admin_user_id"] = user["user_id"]
+    session["admin_username"] = user["username"]
+    session["admin_expires_at"] = _current_epoch_seconds() + ADMIN_SESSION_TTL_SECONDS
+
+
+def _auth_status_payload() -> dict[str, Any]:
+    user = _current_authenticated_user()
+    step_up_expires_at = _current_step_up_expires_at()
+    return {
+        "authenticated": bool(user),
+        "user": user,
+        "stepUpActive": step_up_expires_at > _current_epoch_seconds(),
+        "stepUpExpiresAt": step_up_expires_at,
+        "adminAuthenticated": _is_admin_session_active(),
+    }
 
 
 def _short_session(session_id: str | None) -> str:
@@ -1162,7 +1277,7 @@ def add_security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
+    response.headers["Permissions-Policy"] = "camera=(self), microphone=(self), geolocation=()"
     response.headers["Content-Security-Policy"] = _build_content_security_policy()
     return response
 
@@ -1203,6 +1318,149 @@ def index():
     return render_template("index.html", frontend_tts_autoplay=FRONTEND_TTS_AUTOPLAY)
 
 
+@app.route("/auth-status", methods=["GET"])
+def auth_status():
+    return jsonify(_auth_status_payload()), 200
+
+
+@app.route("/auth/logout", methods=["POST"])
+def auth_logout():
+    _clear_authenticated_user()
+    return jsonify(_auth_status_payload()), 200
+
+
+@app.route("/admin/login", methods=["POST"])
+def admin_login():
+    payload = request.get_json(silent=True) or {}
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+
+    try:
+        user = IDENTITY_STORE.authenticate_admin(username, password)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    if not user:
+        return jsonify({"error": "Invalid admin credentials."}), 401
+
+    _set_admin_session(user)
+    return jsonify({"ok": True, "admin": user, "auth": _auth_status_payload()}), 200
+
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    session.pop("admin_user_id", None)
+    session.pop("admin_username", None)
+    session.pop("admin_expires_at", None)
+    return jsonify({"ok": True, "auth": _auth_status_payload()}), 200
+
+
+@app.route("/admin/users", methods=["GET", "POST"])
+def admin_users():
+    if not _is_admin_session_active():
+        return jsonify({"error": "Admin session required."}), 401
+
+    if request.method == "GET":
+        return jsonify({"users": IDENTITY_STORE.list_users()}), 200
+
+    payload = request.get_json(silent=True) or {}
+    username = str(payload.get("username") or "").strip()
+    display_name = str(payload.get("display_name") or username).strip()
+    role = str(payload.get("role") or "user").strip().lower()
+    password = str(payload.get("password") or "")
+
+    try:
+        user = IDENTITY_STORE.create_user(username, display_name, role=role)
+        if password:
+            user = IDENTITY_STORE.set_user_password(username, password)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({"ok": True, "user": user, "users": IDENTITY_STORE.list_users()}), 201
+
+
+@app.route("/face-capture", methods=["POST"])
+def face_capture():
+    payload = request.get_json(silent=True) or {}
+    action = str(payload.get("action") or "").strip().lower()
+    signature = payload.get("signature")
+    liveness = str(payload.get("liveness") or "pass").strip().lower() or "pass"
+    username = str(payload.get("username") or "").strip().lower()
+    mode = str(payload.get("mode") or "").strip().lower()
+    session_id = _get_session_id()
+
+    if action not in {"enroll", "verify"}:
+        return jsonify({"error": "Invalid face capture action."}), 400
+    if not isinstance(signature, list):
+        return jsonify({"error": "Face capture signature must be a list."}), 400
+
+    runtime = PLUGIN_MANAGER.runtimes.get("face_verify")
+    instance = getattr(runtime, "instance", None) if runtime else None
+    if not instance:
+        return jsonify({"error": "face_verify plugin is not loaded."}), 503
+
+    context = {
+        "session_id": session_id,
+        "remote_addr": request.remote_addr,
+        "message": f"/face-{action}",
+        "user_id": (_current_authenticated_user() or {}).get("user_id"),
+        "step_up_expires_at": _current_step_up_expires_at(),
+    }
+
+    try:
+        if action == "enroll":
+            if username:
+                if not _is_admin_session_active():
+                    return jsonify({"error": "Admin session required for user enrollment."}), 401
+                target_user = IDENTITY_STORE.get_user_by_username(username)
+                if not target_user:
+                    return jsonify({"error": "User not found."}), 404
+                result = instance.enroll_user_capture(target_user["user_id"], signature)
+                result["user"] = target_user
+                result["users"] = IDENTITY_STORE.list_users()
+            else:
+                result = instance.enroll_capture(context, signature)
+        else:
+            authenticated_user = _current_authenticated_user()
+            target_user = authenticated_user if authenticated_user and not username else None
+            if username:
+                target_user = IDENTITY_STORE.get_user_by_username(username)
+                if not target_user:
+                    return jsonify({"error": "User not found."}), 404
+
+            if target_user:
+                requested_mode = mode or ("step_up" if authenticated_user else "login")
+                result = instance.verify_user_capture(target_user["user_id"], signature, liveness=liveness)
+                if result.get("ok"):
+                    confidence_pct = round(float(result.get("face_score", 0.0)) * 100, 1)
+                    if requested_mode == "login":
+                        _set_authenticated_user(target_user)
+                        result["content"] = (
+                            f"Signed in as {target_user['display_name']} "
+                            f"(face match confidence {confidence_pct}%)."
+                        )
+                    else:
+                        if not authenticated_user or authenticated_user["user_id"] != target_user["user_id"]:
+                            return jsonify({"error": "Step-up requires an active session for the same user."}), 403
+                        expires_at = _set_step_up_verified()
+                        result["content"] = (
+                            f"Step-up verification active for {STEP_UP_TTL_SECONDS} seconds "
+                            f"(face match confidence {confidence_pct}%)."
+                        )
+                        result["stepUpExpiresAt"] = expires_at
+                    result["auth"] = _auth_status_payload()
+            else:
+                result = instance.verify_capture(context, signature, liveness=liveness)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        logger.exception("Unhandled error while processing face capture.")
+        return jsonify({"error": "Unable to process face capture."}), 500
+
+    status_code = 200 if result.get("ok") else 403
+    return jsonify(result), status_code
+
+
 @app.route("/session-info", methods=["GET"])
 def session_info():
     is_new_session = not session.get("session_announced", False)
@@ -1214,6 +1472,7 @@ def session_info():
             {
                 "newSession": is_new_session,
                 "model": _active_chat_model(),
+                "auth": _auth_status_payload(),
             }
         ),
         200,
@@ -1725,11 +1984,16 @@ def stream():
         )
 
     session_id = request_session_id
+    authenticated_user = _current_authenticated_user()
     stream_context = {
         "session_id": session_id,
         "remote_addr": request.remote_addr,
         "message": user_message,
         "plugin_notes": [],
+        "user_id": authenticated_user["user_id"] if authenticated_user else None,
+        "username": authenticated_user["username"] if authenticated_user else None,
+        "role": authenticated_user["role"] if authenticated_user else None,
+        "step_up_expires_at": _current_step_up_expires_at(),
     }
     PLUGIN_MANAGER.dispatch_message(user_message, stream_context)
 
@@ -1759,28 +2023,46 @@ def stream():
             )
 
     if user_message.startswith("/git"):
-        if not GIT_ENDPOINT_TOKEN:
-            return Response(
-                sse({"type": "error", "error": "The /git endpoint is disabled by server configuration."}),
-                status=503,
-                mimetype="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "X-Accel-Buffering": "no",
-                },
-            )
+        logger.info("Handling /git locally for session=%s", _short_session(session_id))
+        browser_session_request = _has_session_cookie()
+        if browser_session_request:
+            logger.info("Allowing /git to use browser session authentication before policy evaluation.")
+            if not authenticated_user:
+                logger.info("Rejecting /git because the browser session is not signed in.")
+                return Response(
+                    sse({"type": "error", "error": "Sign in with face verification before using /git."}),
+                    status=401,
+                    mimetype="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+        else:
+            if not GIT_ENDPOINT_TOKEN:
+                logger.info("Rejecting /git because GIT_ENDPOINT_TOKEN is not configured for API access.")
+                return Response(
+                    sse({"type": "error", "error": "The /git API is disabled because no server token is configured."}),
+                    status=503,
+                    mimetype="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
 
-        provided_git_token = _extract_git_auth_token()
-        if not provided_git_token or not secrets.compare_digest(provided_git_token, GIT_ENDPOINT_TOKEN):
-            return Response(
-                sse({"type": "error", "error": "Unauthorized"}),
-                status=401,
-                mimetype="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "X-Accel-Buffering": "no",
-                },
-            )
+            provided_git_token = _extract_git_auth_token()
+            if not provided_git_token or not secrets.compare_digest(provided_git_token, GIT_ENDPOINT_TOKEN):
+                logger.info("Rejecting /git because API request authentication did not match server token.")
+                return Response(
+                    sse({"type": "error", "error": "Unauthorized"}),
+                    status=401,
+                    mimetype="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
 
         git_limited, git_retry_after = _check_rate_limit(
             "git",
@@ -1789,6 +2071,7 @@ def stream():
             RATE_LIMIT_GIT_WINDOW_SECONDS,
         )
         if git_limited:
+            logger.info("Rejecting /git because the request exceeded the git rate limit.")
             return Response(
                 sse(
                     {
@@ -1820,23 +2103,13 @@ def stream():
             )
 
         repo_url = parts[1].strip()
-
         try:
-            _validate_git_repo_url(repo_url)
+            _validate_git_repo_url_format(repo_url)
         except ValueError as exc:
+            logger.info("Rejecting /git because repository URL format validation failed: %s", exc)
             return Response(
                 sse({"type": "error", "error": str(exc)}),
                 status=400,
-                mimetype="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "X-Accel-Buffering": "no",
-                },
-            )
-        except RuntimeError as exc:
-            return Response(
-                sse({"type": "error", "error": str(exc)}),
-                status=502,
                 mimetype="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -1847,6 +2120,7 @@ def stream():
         before_results = PLUGIN_MANAGER.dispatch_before_response(stream_context)
         for result in before_results:
             if isinstance(result, dict) and result.get("deny"):
+                logger.info("Rejecting /git due to policy deny: %s", result.get("reason_code") or "unknown_reason")
                 return Response(
                     sse({"type": "error", "error": result.get("content") or "Request blocked by policy plugin."}),
                     status=403,
@@ -1858,6 +2132,32 @@ def stream():
                 )
 
         try:
+            _validate_git_repo_url_network(repo_url)
+        except ValueError as exc:
+            logger.info("Rejecting /git because repository URL network validation failed: %s", exc)
+            return Response(
+                sse({"type": "error", "error": str(exc)}),
+                status=400,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        except RuntimeError as exc:
+            logger.info("Rejecting /git because repository URL hostname resolution failed: %s", exc)
+            return Response(
+                sse({"type": "error", "error": str(exc)}),
+                status=502,
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        try:
+            logger.info("Proceeding with local /git indexing for repo_url=%s session=%s", repo_url, _short_session(session_id))
             scanned_files, indexed_chunks = _index_git_repository(session_id, repo_url)
             return Response(
                 sse(

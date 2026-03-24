@@ -208,3 +208,6 @@ __marimo__/
 
 # App runtime state
 question_history.json
+data/
+face_verify_store.json
+identity_store.json

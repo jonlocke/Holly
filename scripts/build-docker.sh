@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMAGE_NAME="${IMAGE_NAME:-holly-ux}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 DOCKERFILE_PATH="${DOCKERFILE_PATH:-${REPO_ROOT}/Dockerfile}"
+DATA_DIR="${HOLLY_DATA_DIR:-${REPO_ROOT}/data}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Error: docker is not installed or not on PATH." >&2
@@ -25,7 +26,10 @@ echo
 echo "Built image: ${IMAGE_NAME}:${IMAGE_TAG}"
 echo "Run with: docker run --rm \
 --name holly-test \
+-v ${DATA_DIR}:/data \
 -p 5500:5000 \
+-e HOLLY_IDENTITY_STORE_PATH=/data/identity_store.json \
+-e HOLLY_FACE_VERIFY_STORE_PATH=/data/face_verify_store.json \
 -e FLASK_DEBUG=1 \
 -e OLLAMA_API_BASE=\"http://holly:18789\" \
 -e OLLAMA_MODEL=\"$OLLAMA_MODEL\" \

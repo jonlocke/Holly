@@ -98,13 +98,76 @@ class Plugin:
     def on_after_response(self, response, context):
         return None
 
+    def enroll_capture(self, context: dict[str, Any] | None, signature: list[int]) -> dict[str, Any]:
+        session_id = self._session_id(context)
+        assert self._backend is not None
+        self._backend.enroll_capture(session_id, signature)
+        return {
+            "ok": True,
+            "content": "Camera enrollment complete for this session. Use Verify Face before sensitive commands.",
+            "status": self._status_payload(session_id),
+        }
+
+    def enroll_user_capture(self, user_id: str, signature: list[int]) -> dict[str, Any]:
+        assert self._backend is not None
+        self._backend.enroll_user_capture(user_id, signature)
+        return {
+            "ok": True,
+            "content": "Face enrollment saved for user.",
+        }
+
+    def verify_user_capture(self, user_id: str, signature: list[int], liveness: str = "pass") -> dict[str, Any]:
+        assert self._backend is not None
+        result = self._backend.verify_user_capture(user_id, signature, liveness=liveness)
+        if not result.ok:
+            return {
+                "ok": False,
+                "content": reason_details(result.reason_code)["user_message"],
+                "reason_code": result.reason_code,
+                "face_score": result.face_score,
+            }
+        return {
+            "ok": True,
+            "content": "Face verification successful.",
+            "reason_code": result.reason_code,
+            "face_score": result.face_score,
+        }
+
+    def verify_capture(self, context: dict[str, Any] | None, signature: list[int], liveness: str = "pass") -> dict[str, Any]:
+        session_id = self._session_id(context)
+        assert self._backend is not None
+        result = self._backend.verify_capture(session_id, signature, liveness)
+        if not result.ok:
+            return {
+                "ok": False,
+                "content": reason_details(result.reason_code)["user_message"],
+                "reason_code": result.reason_code,
+                "face_score": result.face_score,
+                "status": self._status_payload(session_id),
+            }
+
+        assurance = self.build_assurance(context)
+        return {
+            "ok": True,
+            "content": f"Face verification successful. Step-up window active for {self._verify_ttl_seconds} seconds.",
+            "reason_code": result.reason_code,
+            "face_score": result.face_score,
+            "assurance": assurance,
+            "status": self._status_payload(session_id),
+        }
+
     def build_assurance(self, context: dict[str, Any] | None) -> dict[str, Any]:
         session_id = self._session_id(context)
         now = int(time.time())
-        assert self._backend is not None
-        status = self._backend.status(session_id)
-        verified = bool(status["verified"])
-        expires_at = now + int(status["seconds_remaining"]) if verified else 0
+        step_up_expires_at = int((context or {}).get("step_up_expires_at") or 0)
+        verified = step_up_expires_at > now
+        if verified:
+            expires_at = step_up_expires_at
+        else:
+            assert self._backend is not None
+            status = self._backend.status(session_id)
+            verified = bool(status["verified"])
+            expires_at = now + int(status["seconds_remaining"]) if verified else 0
         reason_code = "verified" if verified else "assurance_missing"
         return build_assurance_payload(
             subject_id=str((context or {}).get("user_id") or session_id),
@@ -128,6 +191,14 @@ class Plugin:
 
     def _response(self, command: str, content: str) -> dict[str, Any]:
         return {"type": "command_response", "command": command, "content": content}
+
+    def _status_payload(self, session_id: str) -> dict[str, Any]:
+        assert self._backend is not None
+        status = self._backend.status(session_id)
+        return {
+            "verified": bool(status["verified"]),
+            "seconds_remaining": int(status["seconds_remaining"]),
+        }
 
     def _session_id(self, context: dict[str, Any] | None) -> str:
         return str((context or {}).get("session_id") or "unknown")

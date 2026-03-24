@@ -74,7 +74,7 @@ Assurance object fields
 - factors_present list
 - factor_freshness timestamps per factor
 - face_score latest numeric score
-- liveness_status pass fail not_required unavailable
+- liveness_status pass fail unavailable indeterminate
 - assurance_level low medium high
 - expires_at
 - issuer plugin id
@@ -138,7 +138,7 @@ Threshold profiles by command impact
 - Example intent: a reboot-class command uses stricter thresholds than routine privileged operations.
 
 Step-up TTL
-- Default 120 to 300 seconds
+- Default 120 seconds
 - Critical commands may require 30 to 60 second freshness
 
 10. Data handling and retention
