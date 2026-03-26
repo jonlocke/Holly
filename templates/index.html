@@ -1578,6 +1578,13 @@ window.addEventListener("pointerdown", primeAudioFromGesture, { once: true, pass
 window.addEventListener("touchstart", primeAudioFromGesture, { once: true, passive: true });
 window.addEventListener("keydown", primeAudioFromGesture, { once: true });
 
+const primeMicAudio = () => {
+    unlockAudioPlayback().catch(() => {});
+};
+
+micBtn.addEventListener("pointerdown", primeMicAudio, { passive: true });
+micBtn.addEventListener("touchstart", primeMicAudio, { passive: true });
+
 mobileActionsToggle.addEventListener("click", () => {
     setMobileActionsOpen(!mobileActionsPanel.classList.contains("is-open"));
 });
