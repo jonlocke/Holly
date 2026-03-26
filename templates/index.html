@@ -306,6 +306,10 @@ const speechCueCache = {
     processingComplete: null,
 };
 let pendingProcessingPlaybackToken = null;
+let audioPlaybackUnlocked = false;
+let audioUnlockPromise = null;
+
+const SILENT_WAV_DATA_URL = "data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAAAAAAAA";
 
 function shouldUseCollapsedMobileActions() {
     return window.matchMedia("(max-width: 480px)").matches;
@@ -316,6 +320,37 @@ function setMobileActionsOpen(isOpen) {
     mobileActionsPanel.classList.toggle("is-open", open);
     mobileActionsToggle.setAttribute("aria-expanded", open ? "true" : "false");
     mobileActionsToggle.textContent = open ? "Hide Actions" : "Actions";
+}
+
+async function unlockAudioPlayback() {
+    if (audioPlaybackUnlocked) {
+        return true;
+    }
+
+    if (audioUnlockPromise) {
+        return audioUnlockPromise;
+    }
+
+    audioUnlockPromise = (async () => {
+        try {
+            const primer = new Audio(SILENT_WAV_DATA_URL);
+            primer.muted = true;
+            primer.preload = "auto";
+            primer.playsInline = true;
+            primer.setAttribute("playsinline", "");
+            await primer.play();
+            primer.pause();
+            primer.currentTime = 0;
+            audioPlaybackUnlocked = true;
+            return true;
+        } catch (error) {
+            return false;
+        } finally {
+            audioUnlockPromise = null;
+        }
+    })();
+
+    return audioUnlockPromise;
 }
 
 function countWords(text) {
@@ -635,7 +670,8 @@ function createSpeakerButton() {
     button.dataset.audioReady = "false";
     setSpeakerState(button, "loading");
 
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
+        await unlockAudioPlayback();
         const rawChunks = button.__audioChunks;
         if (!rawChunks || !rawChunks.length) {
             return;
@@ -694,6 +730,9 @@ function enqueueAudioChunkForPlayback(wavBytes, playbackToken) {
         const audioBlob = new Blob([nextBytes], { type: "audio/wav" });
         const objectUrl = URL.createObjectURL(audioBlob);
         const audio = new Audio(objectUrl);
+        audio.preload = "auto";
+        audio.playsInline = true;
+        audio.setAttribute("playsinline", "");
         activeSpeechAudio = audio;
 
         const clearActiveAudio = () => {
@@ -1435,6 +1474,14 @@ const savedTheme = localStorage.getItem("theme");
 setTheme(savedTheme === "cyberpunk" ? "cyberpunk" : "default");
 setMobileActionsOpen(false);
 
+const primeAudioFromGesture = () => {
+    unlockAudioPlayback().catch(() => {});
+};
+
+window.addEventListener("pointerdown", primeAudioFromGesture, { once: true, passive: true });
+window.addEventListener("touchstart", primeAudioFromGesture, { once: true, passive: true });
+window.addEventListener("keydown", primeAudioFromGesture, { once: true });
+
 mobileActionsToggle.addEventListener("click", () => {
     setMobileActionsOpen(!mobileActionsPanel.classList.contains("is-open"));
 });
@@ -1710,6 +1757,7 @@ function appendMessage(content, role) {
 
 form.addEventListener("submit", async function(e) {
     e.preventDefault();
+    await unlockAudioPlayback();
 
     const authenticated = await ensureAuthenticatedSession();
     if (!authenticated) {
