@@ -44,7 +44,7 @@
                 Actions
             </button>
             <div id="mobile-actions-panel" class="mobile-actions-panel">
-                <button type="submit">Send</button>
+                <button type="submit" id="send-btn">Send</button>
                 <button type="button" id="stop-btn" disabled>Stop</button>
                 <button type="button" id="upload-btn" class="control-btn">Upload file</button>
                 <button type="button" id="face-verify-btn" class="control-btn">Verify Face</button>
@@ -131,6 +131,7 @@ const form = document.getElementById("chat-form");
 const input = document.getElementById("user-input");
 const output = document.getElementById("output");
 const prediction = document.getElementById("input-prediction");
+const sendBtn = document.getElementById("send-btn");
 const stopBtn = document.getElementById("stop-btn");
 const avatarThemeToggle = document.getElementById("avatar-theme-toggle");
 const fileInput = document.getElementById("file-input");
@@ -264,6 +265,9 @@ let isStreaming = false;
 let activeSpeechAudio = null;
 let activeSpeechQueue = [];
 let activeSpeechPlaybackToken = 0;
+let activeSpeechPumpPromise = null;
+let speechAudioContext = null;
+let speechPlaybackTailTime = 0;
 let micStream = null;
 let micRecorder = null;
 let micChunks = [];
@@ -323,26 +327,34 @@ function setMobileActionsOpen(isOpen) {
 }
 
 async function unlockAudioPlayback() {
-    if (audioPlaybackUnlocked) {
-        return true;
-    }
-
     if (audioUnlockPromise) {
         return audioUnlockPromise;
     }
 
     audioUnlockPromise = (async () => {
         try {
-            const primer = new Audio(SILENT_WAV_DATA_URL);
-            primer.muted = true;
-            primer.preload = "auto";
-            primer.playsInline = true;
-            primer.setAttribute("playsinline", "");
-            await primer.play();
-            primer.pause();
-            primer.currentTime = 0;
-            audioPlaybackUnlocked = true;
-            return true;
+            const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextCtor) {
+                return false;
+            }
+
+            if (!speechAudioContext || speechAudioContext.state === "closed") {
+                speechAudioContext = new AudioContextCtor();
+            }
+
+            if (speechAudioContext.state !== "running") {
+                await speechAudioContext.resume();
+            }
+
+            const buffer = speechAudioContext.createBuffer(1, 1, 22050);
+            const source = speechAudioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(speechAudioContext.destination);
+            source.start(0);
+            source.stop(0);
+
+            audioPlaybackUnlocked = speechAudioContext.state === "running";
+            return audioPlaybackUnlocked;
         } catch (error) {
             return false;
         } finally {
@@ -685,10 +697,20 @@ function createSpeakerButton() {
 function stopSpeechPlayback() {
     activeSpeechPlaybackToken += 1;
     activeSpeechQueue = [];
+    activeSpeechPumpPromise = null;
+    speechPlaybackTailTime = 0;
 
     if (activeSpeechAudio) {
-        activeSpeechAudio.pause();
-        activeSpeechAudio.src = "";
+        try {
+            activeSpeechAudio.stop();
+        } catch (error) {
+            // ignore nodes already stopped
+        }
+        try {
+            activeSpeechAudio.disconnect();
+        } catch (error) {
+            // ignore nodes already disconnected
+        }
         activeSpeechAudio = null;
     }
 
@@ -722,44 +744,76 @@ function enqueueAudioChunkForPlayback(wavBytes, playbackToken) {
     activeSpeechQueue.push(wavBytes);
 
     const pumpQueue = async () => {
-        if (playbackToken !== activeSpeechPlaybackToken || activeSpeechAudio || activeSpeechQueue.length === 0) {
+        if (
+            playbackToken !== activeSpeechPlaybackToken ||
+            activeSpeechPumpPromise ||
+            activeSpeechQueue.length === 0
+        ) {
             return;
         }
 
-        const nextBytes = activeSpeechQueue.shift();
-        const audioBlob = new Blob([nextBytes], { type: "audio/wav" });
-        const objectUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio(objectUrl);
-        audio.preload = "auto";
-        audio.playsInline = true;
-        audio.setAttribute("playsinline", "");
-        activeSpeechAudio = audio;
+        activeSpeechPumpPromise = (async () => {
+            while (playbackToken === activeSpeechPlaybackToken && activeSpeechQueue.length > 0) {
+                const nextBytes = activeSpeechQueue.shift();
+                if (!nextBytes || nextBytes.length === 0) {
+                    continue;
+                }
 
-        const clearActiveAudio = () => {
-            if (activeSpeechAudio === audio) {
-                activeSpeechAudio = null;
+                try {
+                    await unlockAudioPlayback();
+                    if (!speechAudioContext) {
+                        break;
+                    }
+
+                    const wavCopy = nextBytes.slice().buffer;
+                    const decodedBuffer = await speechAudioContext.decodeAudioData(wavCopy);
+                    if (playbackToken !== activeSpeechPlaybackToken) {
+                        break;
+                    }
+
+                    const source = speechAudioContext.createBufferSource();
+                    source.buffer = decodedBuffer;
+                    source.connect(speechAudioContext.destination);
+                    activeSpeechAudio = source;
+
+                    const startAt = Math.max(
+                        speechAudioContext.currentTime + 0.01,
+                        speechPlaybackTailTime || 0,
+                    );
+                    speechPlaybackTailTime = startAt + decodedBuffer.duration;
+
+                    const completion = new Promise((resolve) => {
+                        source.onended = resolve;
+                    });
+
+                    source.start(startAt);
+                    await completion;
+
+                    if (activeSpeechAudio === source) {
+                        activeSpeechAudio = null;
+                    }
+                } catch (error) {
+                    if (activeSpeechAudio) {
+                        try {
+                            activeSpeechAudio.disconnect();
+                        } catch (disconnectError) {
+                            // ignore disconnect failures
+                        }
+                        activeSpeechAudio = null;
+                    }
+                    speechPlaybackTailTime = speechAudioContext ? speechAudioContext.currentTime : 0;
+                }
             }
-            URL.revokeObjectURL(objectUrl);
-        };
-
-        audio.onended = () => {
-            clearActiveAudio();
-            pumpQueue();
-        };
-        audio.onerror = () => {
-            clearActiveAudio();
-            pumpQueue();
-        };
+        })();
 
         try {
-            await audio.play();
-        } catch (error) {
-            clearActiveAudio();
-            pumpQueue();
+            await activeSpeechPumpPromise;
+        } finally {
+            activeSpeechPumpPromise = null;
         }
     };
 
-    pumpQueue();
+    pumpQueue().catch(() => {});
 }
 
 async function waitForSpeechQueueToDrain(playbackToken, timeoutMs = 15000) {
@@ -1490,6 +1544,11 @@ window.addEventListener("resize", () => {
     if (!shouldUseCollapsedMobileActions()) {
         setMobileActionsOpen(false);
     }
+});
+
+sendBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    form.requestSubmit();
 });
 
 avatarThemeToggle.addEventListener("click", () => {
