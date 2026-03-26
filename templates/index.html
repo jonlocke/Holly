@@ -673,6 +673,15 @@ function playCachedAudio(chunks) {
     queueAudioChunksForPlayback(chunks, activeSpeechPlaybackToken);
 }
 
+async function playCachedAudioFromGesture(chunks) {
+    if (!chunks || !chunks.length) {
+        return;
+    }
+
+    await unlockAudioPlayback();
+    playCachedAudio(chunks);
+}
+
 function createSpeakerButton() {
     const button = document.createElement("button");
     button.className = "speaker-indicator speaker-loading";
@@ -682,13 +691,12 @@ function createSpeakerButton() {
     button.dataset.audioReady = "false";
     setSpeakerState(button, "loading");
 
-    button.addEventListener("click", () => {
-        unlockAudioPlayback().catch(() => {});
+    button.addEventListener("click", async () => {
         const rawChunks = button.__audioChunks;
         if (!rawChunks || !rawChunks.length) {
             return;
         }
-        playCachedAudio(rawChunks);
+        await playCachedAudioFromGesture(rawChunks);
     });
 
     return button;
