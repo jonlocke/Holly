@@ -327,6 +327,10 @@ function setMobileActionsOpen(isOpen) {
 }
 
 async function unlockAudioPlayback() {
+    if (audioPlaybackUnlocked && speechAudioContext && speechAudioContext.state === "running") {
+        return true;
+    }
+
     if (audioUnlockPromise) {
         return audioUnlockPromise;
     }
@@ -1824,7 +1828,7 @@ function appendMessage(content, role) {
 
 form.addEventListener("submit", async function(e) {
     e.preventDefault();
-    unlockAudioPlayback().catch(() => {});
+    await unlockAudioPlayback();
 
     const authenticated = await ensureAuthenticatedSession();
     if (!authenticated) {
