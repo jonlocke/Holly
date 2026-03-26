@@ -308,6 +308,14 @@ textarea:focus-visible {
     flex-wrap: nowrap;
 }
 
+.mobile-actions-toggle {
+    display: none;
+}
+
+.mobile-actions-panel {
+    display: contents;
+}
+
 .mic-status {
     min-height: 18px;
     font-size: 12px;
@@ -988,6 +996,26 @@ body.cyberpunk .typing span {
 }
 
 @media (max-width: 480px) {
+    .mobile-actions-toggle {
+        display: inline-flex;
+        flex: 0 0 auto;
+    }
+
+    .mobile-actions-panel {
+        display: none;
+        width: 100%;
+    }
+
+    .mobile-actions-panel.is-open {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+
+    .mobile-actions-panel > button {
+        width: 100%;
+    }
+
     .chat-container {
         padding: 12px;
     }
@@ -1014,6 +1042,14 @@ body.cyberpunk .typing span {
         padding-right: max(12px, env(safe-area-inset-right));
         padding-bottom: max(12px, env(safe-area-inset-bottom));
         padding-left: max(12px, env(safe-area-inset-left));
+    }
+
+    .primary-controls {
+        gap: 8px;
+    }
+
+    #mic-btn {
+        flex: 0 0 auto;
     }
 }
 

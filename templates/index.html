@@ -34,11 +34,22 @@
                 ></textarea>
             </div>
 
-            <button type="submit">Send</button>
-            <button type="button" id="stop-btn" disabled>Stop</button>
-            <button type="button" id="upload-btn" class="control-btn">Upload file</button>
-            <button type="button" id="face-verify-btn" class="control-btn">Verify Face</button>
-            <button type="button" id="logout-btn" class="control-btn">Logout</button>
+            <button
+                type="button"
+                id="mobile-actions-toggle"
+                class="control-btn mobile-actions-toggle"
+                aria-expanded="false"
+                aria-controls="mobile-actions-panel"
+            >
+                Actions
+            </button>
+            <div id="mobile-actions-panel" class="mobile-actions-panel">
+                <button type="submit">Send</button>
+                <button type="button" id="stop-btn" disabled>Stop</button>
+                <button type="button" id="upload-btn" class="control-btn">Upload file</button>
+                <button type="button" id="face-verify-btn" class="control-btn">Verify Face</button>
+                <button type="button" id="logout-btn" class="control-btn">Logout</button>
+            </div>
             <button type="button" id="mic-btn" class="control-btn" aria-pressed="false" title="Enable microphone">🎤</button>
         </div>
         <div id="mic-status" class="mic-status" aria-live="polite"></div>
@@ -129,6 +140,8 @@ const micStatus = document.getElementById("mic-status");
 const faceVerifyBtn = document.getElementById("face-verify-btn");
 const logoutBtn = document.getElementById("logout-btn");
 const faceStatus = document.getElementById("face-status");
+const mobileActionsToggle = document.getElementById("mobile-actions-toggle");
+const mobileActionsPanel = document.getElementById("mobile-actions-panel");
 const faceModal = document.getElementById("face-modal");
 const faceVideo = document.getElementById("face-video");
 const faceCanvas = document.getElementById("face-canvas");
@@ -293,6 +306,17 @@ const speechCueCache = {
     processingComplete: null,
 };
 let pendingProcessingPlaybackToken = null;
+
+function shouldUseCollapsedMobileActions() {
+    return window.matchMedia("(max-width: 480px)").matches;
+}
+
+function setMobileActionsOpen(isOpen) {
+    const open = Boolean(isOpen && shouldUseCollapsedMobileActions());
+    mobileActionsPanel.classList.toggle("is-open", open);
+    mobileActionsToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    mobileActionsToggle.textContent = open ? "Hide Actions" : "Actions";
+}
 
 function countWords(text) {
     const safeText = (text || "").trim();
@@ -1409,6 +1433,17 @@ function setTheme(themeName) {
 
 const savedTheme = localStorage.getItem("theme");
 setTheme(savedTheme === "cyberpunk" ? "cyberpunk" : "default");
+setMobileActionsOpen(false);
+
+mobileActionsToggle.addEventListener("click", () => {
+    setMobileActionsOpen(!mobileActionsPanel.classList.contains("is-open"));
+});
+
+window.addEventListener("resize", () => {
+    if (!shouldUseCollapsedMobileActions()) {
+        setMobileActionsOpen(false);
+    }
+});
 
 avatarThemeToggle.addEventListener("click", () => {
     const nextTheme = document.body.classList.contains("cyberpunk")
@@ -1638,6 +1673,7 @@ async function uploadSelectedFile() {
 }
 
 uploadBtn.addEventListener("click", () => {
+    setMobileActionsOpen(false);
     fileInput.click();
 });
 
@@ -1682,6 +1718,8 @@ form.addEventListener("submit", async function(e) {
 
     const message = input.value.trim();
     if (!message) return;
+
+    setMobileActionsOpen(false);
 
     appendMessage(message, "user");
 
