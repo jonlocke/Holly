@@ -677,15 +677,6 @@ function playCachedAudio(chunks) {
     queueAudioChunksForPlayback(chunks, activeSpeechPlaybackToken);
 }
 
-async function playCachedAudioFromGesture(chunks) {
-    if (!chunks || !chunks.length) {
-        return;
-    }
-
-    await unlockAudioPlayback();
-    playCachedAudio(chunks);
-}
-
 function createSpeakerButton() {
     const button = document.createElement("button");
     button.className = "speaker-indicator speaker-loading";
@@ -695,12 +686,19 @@ function createSpeakerButton() {
     button.dataset.audioReady = "false";
     setSpeakerState(button, "loading");
 
-    button.addEventListener("click", async () => {
+    const primeButtonAudio = () => {
+        unlockAudioPlayback().catch(() => {});
+    };
+
+    button.addEventListener("pointerdown", primeButtonAudio, { passive: true });
+    button.addEventListener("touchstart", primeButtonAudio, { passive: true });
+
+    button.addEventListener("click", () => {
         const rawChunks = button.__audioChunks;
         if (!rawChunks || !rawChunks.length) {
             return;
         }
-        await playCachedAudioFromGesture(rawChunks);
+        playCachedAudio(rawChunks);
     });
 
     return button;
@@ -1560,6 +1558,7 @@ window.addEventListener("resize", () => {
 
 sendBtn.addEventListener("click", (event) => {
     event.preventDefault();
+    unlockAudioPlayback().catch(() => {});
     form.requestSubmit();
 });
 
@@ -1828,7 +1827,7 @@ function appendMessage(content, role) {
 
 form.addEventListener("submit", async function(e) {
     e.preventDefault();
-    await unlockAudioPlayback();
+    unlockAudioPlayback().catch(() => {});
 
     const authenticated = await ensureAuthenticatedSession();
     if (!authenticated) {
