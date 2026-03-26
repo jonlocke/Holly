@@ -50,7 +50,6 @@
                 <button type="button" id="face-verify-btn" class="control-btn">Verify Face</button>
                 <button type="button" id="logout-btn" class="control-btn">Logout</button>
             </div>
-            <button type="button" id="speak-next-btn" class="control-btn" aria-pressed="false" title="Speak the next reply">Speak Next</button>
             <button type="button" id="mic-btn" class="control-btn" aria-pressed="false" title="Enable microphone">🎤</button>
         </div>
         <div id="mic-status" class="mic-status" aria-live="polite"></div>
@@ -138,7 +137,6 @@ const avatarThemeToggle = document.getElementById("avatar-theme-toggle");
 const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
 const micBtn = document.getElementById("mic-btn");
-const speakNextBtn = document.getElementById("speak-next-btn");
 const micStatus = document.getElementById("mic-status");
 const faceVerifyBtn = document.getElementById("face-verify-btn");
 const logoutBtn = document.getElementById("logout-btn");
@@ -314,8 +312,6 @@ const speechCueCache = {
 let pendingProcessingPlaybackToken = null;
 let audioPlaybackUnlocked = false;
 let audioUnlockPromise = null;
-let speakNextReplyArmed = false;
-
 const SILENT_WAV_DATA_URL = "data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAAAAAAAA";
 
 function shouldUseCollapsedMobileActions() {
@@ -398,11 +394,6 @@ function setAuthGateStatus(message) {
 
 function setAdminStatus(message) {
     adminStatus.textContent = message || "";
-}
-
-function renderSpeakNextState() {
-    speakNextBtn.setAttribute("aria-pressed", speakNextReplyArmed ? "true" : "false");
-    speakNextBtn.textContent = speakNextReplyArmed ? "Speak Armed" : "Speak Next";
 }
 
 function renderAdminUsers(users) {
@@ -649,6 +640,29 @@ async function submitFaceCapture() {
 
 function createAudioChunksCache(chunks) {
     return chunks.map((chunk) => new Uint8Array(chunk));
+}
+
+function shouldUseIPhoneBubblePlaybackTarget() {
+    return window.matchMedia("(max-width: 480px)").matches && /iPhone|iPod/i.test(navigator.userAgent);
+}
+
+function isInteractiveBubbleTarget(target) {
+    return Boolean(target?.closest("a, button, input, textarea, select, summary, details"));
+}
+
+function updateBubblePlaybackTarget(bubble, speakerButton) {
+    if (!bubble || !speakerButton) {
+        return;
+    }
+
+    const enabled = shouldUseIPhoneBubblePlaybackTarget() && speakerButton.dataset.audioReady === "true";
+    bubble.classList.toggle("bubble-audio-ready-mobile", enabled);
+}
+
+function refreshBubblePlaybackTargets() {
+    document.querySelectorAll(".speaker-indicator").forEach((speakerButton) => {
+        updateBubblePlaybackTarget(speakerButton.__bubble, speakerButton);
+    });
 }
 
 function setSpeakerState(button, state) {
@@ -1092,6 +1106,7 @@ async function cacheStreamedTTS(text, speakerButton, shouldAutoplay, useProcessi
     speakerButton.__audioChunks = createAudioChunksCache(chunks);
     speakerButton.dataset.audioReady = "true";
     setSpeakerState(speakerButton, "ready");
+    updateBubblePlaybackTarget(speakerButton.__bubble, speakerButton);
 }
 
 async function cacheAssistantAudio(text, speakerButton, useProcessingPrelude, shouldAutoplay = FRONTEND_TTS_AUTOPLAY) {
@@ -1107,6 +1122,8 @@ async function cacheAssistantAudio(text, speakerButton, useProcessingPrelude, sh
     } catch (error) {
         console.warn("Unable to cache streamed TTS audio.", error);
         setSpeakerState(speakerButton, "error");
+        speakerButton.dataset.audioReady = "false";
+        updateBubblePlaybackTarget(speakerButton.__bubble, speakerButton);
         pendingProcessingPlaybackToken = null;
         if (shouldAutoplay) {
             browserSpeak(safeText);
@@ -1373,10 +1390,7 @@ async function submitRecordedSpeech(speechBlob, { filename = "speech.wav", autoS
             historyCursor = -1;
             setInputValue("");
 
-            const shouldSpeakReply = FRONTEND_TTS_AUTOPLAY || speakNextReplyArmed;
-            speakNextReplyArmed = false;
-            renderSpeakNextState();
-
+            const shouldSpeakReply = FRONTEND_TTS_AUTOPLAY;
             const useProcessingPrelude = shouldSpeakReply && countWords(transcript) > PROCESSING_WORD_THRESHOLD;
             if (shouldSpeakReply) {
                 queueProcessingCueForPrompt(transcript);
@@ -1583,7 +1597,6 @@ function setTheme(themeName) {
 const savedTheme = localStorage.getItem("theme");
 setTheme(savedTheme === "cyberpunk" ? "cyberpunk" : "default");
 setMobileActionsOpen(false);
-renderSpeakNextState();
 
 const primeAudioFromGesture = () => {
     unlockAudioPlayback().catch(() => {});
@@ -1600,12 +1613,6 @@ const primeMicAudio = () => {
 micBtn.addEventListener("pointerdown", primeMicAudio, { passive: true });
 micBtn.addEventListener("touchstart", primeMicAudio, { passive: true });
 
-speakNextBtn.addEventListener("click", () => {
-    speakNextReplyArmed = !speakNextReplyArmed;
-    unlockAudioPlayback().catch(() => {});
-    renderSpeakNextState();
-});
-
 mobileActionsToggle.addEventListener("click", () => {
     setMobileActionsOpen(!mobileActionsPanel.classList.contains("is-open"));
 });
@@ -1614,6 +1621,7 @@ window.addEventListener("resize", () => {
     if (!shouldUseCollapsedMobileActions()) {
         setMobileActionsOpen(false);
     }
+    refreshBubblePlaybackTargets();
 });
 
 sendBtn.addEventListener("click", (event) => {
@@ -1908,10 +1916,7 @@ form.addEventListener("submit", async function(e) {
     historyCursor = -1;
     setInputValue("");
 
-    const shouldSpeakReply = FRONTEND_TTS_AUTOPLAY || speakNextReplyArmed;
-    speakNextReplyArmed = false;
-    renderSpeakNextState();
-
+    const shouldSpeakReply = FRONTEND_TTS_AUTOPLAY;
     const useProcessingPrelude = shouldSpeakReply && countWords(message) > PROCESSING_WORD_THRESHOLD;
     if (shouldSpeakReply) {
         queueProcessingCueForPrompt(message);
@@ -1929,6 +1934,29 @@ function streamResponse(message, shouldSpeakReply = false, useProcessingPrelude 
     const bubble = document.createElement("div");
     bubble.className = "bubble";
     const speakerButton = createSpeakerButton();
+    speakerButton.__bubble = bubble;
+
+    const primeBubblePlayback = () => {
+        if (!shouldUseIPhoneBubblePlaybackTarget()) {
+            return;
+        }
+        unlockAudioPlayback().catch(() => {});
+    };
+
+    bubble.addEventListener("pointerdown", primeBubblePlayback, { passive: true });
+    bubble.addEventListener("touchstart", primeBubblePlayback, { passive: true });
+    bubble.addEventListener("click", (event) => {
+        if (!shouldUseIPhoneBubblePlaybackTarget() || isInteractiveBubbleTarget(event.target)) {
+            return;
+        }
+
+        const rawChunks = speakerButton.__audioChunks;
+        if (!rawChunks || !rawChunks.length) {
+            return;
+        }
+
+        playCachedAudio(rawChunks);
+    });
 
     // Typing indicator
     bubble.innerHTML = `
