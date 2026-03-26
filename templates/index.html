@@ -50,6 +50,7 @@
                 <button type="button" id="face-verify-btn" class="control-btn">Verify Face</button>
                 <button type="button" id="logout-btn" class="control-btn">Logout</button>
             </div>
+            <button type="button" id="speak-next-btn" class="control-btn" aria-pressed="false" title="Speak the next reply">Speak Next</button>
             <button type="button" id="mic-btn" class="control-btn" aria-pressed="false" title="Enable microphone">🎤</button>
         </div>
         <div id="mic-status" class="mic-status" aria-live="polite"></div>
@@ -137,6 +138,7 @@ const avatarThemeToggle = document.getElementById("avatar-theme-toggle");
 const fileInput = document.getElementById("file-input");
 const uploadBtn = document.getElementById("upload-btn");
 const micBtn = document.getElementById("mic-btn");
+const speakNextBtn = document.getElementById("speak-next-btn");
 const micStatus = document.getElementById("mic-status");
 const faceVerifyBtn = document.getElementById("face-verify-btn");
 const logoutBtn = document.getElementById("logout-btn");
@@ -312,6 +314,7 @@ const speechCueCache = {
 let pendingProcessingPlaybackToken = null;
 let audioPlaybackUnlocked = false;
 let audioUnlockPromise = null;
+let speakNextReplyArmed = false;
 
 const SILENT_WAV_DATA_URL = "data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAAAAAAAA";
 
@@ -395,6 +398,11 @@ function setAuthGateStatus(message) {
 
 function setAdminStatus(message) {
     adminStatus.textContent = message || "";
+}
+
+function renderSpeakNextState() {
+    speakNextBtn.setAttribute("aria-pressed", speakNextReplyArmed ? "true" : "false");
+    speakNextBtn.textContent = speakNextReplyArmed ? "Speak Armed" : "Speak Next";
 }
 
 function renderAdminUsers(users) {
@@ -952,7 +960,7 @@ async function warmProcessingSpeechCache() {
 }
 
 function queueProcessingCueForPrompt(message) {
-    if (!FRONTEND_TTS_AUTOPLAY || countWords(message) <= PROCESSING_WORD_THRESHOLD) {
+    if (countWords(message) <= PROCESSING_WORD_THRESHOLD) {
         pendingProcessingPlaybackToken = null;
         return;
     }
@@ -1086,7 +1094,7 @@ async function cacheStreamedTTS(text, speakerButton, shouldAutoplay, useProcessi
     setSpeakerState(speakerButton, "ready");
 }
 
-async function cacheAssistantAudio(text, speakerButton, useProcessingPrelude) {
+async function cacheAssistantAudio(text, speakerButton, useProcessingPrelude, shouldAutoplay = FRONTEND_TTS_AUTOPLAY) {
     const safeText = (text || "").trim();
     if (!safeText) {
         setSpeakerState(speakerButton, "error");
@@ -1095,12 +1103,12 @@ async function cacheAssistantAudio(text, speakerButton, useProcessingPrelude) {
     }
 
     try {
-        await cacheStreamedTTS(safeText, speakerButton, FRONTEND_TTS_AUTOPLAY, useProcessingPrelude);
+        await cacheStreamedTTS(safeText, speakerButton, shouldAutoplay, useProcessingPrelude);
     } catch (error) {
         console.warn("Unable to cache streamed TTS audio.", error);
         setSpeakerState(speakerButton, "error");
         pendingProcessingPlaybackToken = null;
-        if (FRONTEND_TTS_AUTOPLAY) {
+        if (shouldAutoplay) {
             browserSpeak(safeText);
         }
     }
@@ -1365,9 +1373,15 @@ async function submitRecordedSpeech(speechBlob, { filename = "speech.wav", autoS
             historyCursor = -1;
             setInputValue("");
 
-            const useProcessingPrelude = countWords(transcript) > PROCESSING_WORD_THRESHOLD;
-            queueProcessingCueForPrompt(transcript);
-            streamResponse(transcript, useProcessingPrelude);
+            const shouldSpeakReply = FRONTEND_TTS_AUTOPLAY || speakNextReplyArmed;
+            speakNextReplyArmed = false;
+            renderSpeakNextState();
+
+            const useProcessingPrelude = shouldSpeakReply && countWords(transcript) > PROCESSING_WORD_THRESHOLD;
+            if (shouldSpeakReply) {
+                queueProcessingCueForPrompt(transcript);
+            }
+            streamResponse(transcript, shouldSpeakReply, useProcessingPrelude);
             return;
         }
 
@@ -1569,6 +1583,7 @@ function setTheme(themeName) {
 const savedTheme = localStorage.getItem("theme");
 setTheme(savedTheme === "cyberpunk" ? "cyberpunk" : "default");
 setMobileActionsOpen(false);
+renderSpeakNextState();
 
 const primeAudioFromGesture = () => {
     unlockAudioPlayback().catch(() => {});
@@ -1584,6 +1599,12 @@ const primeMicAudio = () => {
 
 micBtn.addEventListener("pointerdown", primeMicAudio, { passive: true });
 micBtn.addEventListener("touchstart", primeMicAudio, { passive: true });
+
+speakNextBtn.addEventListener("click", () => {
+    speakNextReplyArmed = !speakNextReplyArmed;
+    unlockAudioPlayback().catch(() => {});
+    renderSpeakNextState();
+});
 
 mobileActionsToggle.addEventListener("click", () => {
     setMobileActionsOpen(!mobileActionsPanel.classList.contains("is-open"));
@@ -1887,14 +1908,20 @@ form.addEventListener("submit", async function(e) {
     historyCursor = -1;
     setInputValue("");
 
-    const useProcessingPrelude = countWords(message) > PROCESSING_WORD_THRESHOLD;
-    queueProcessingCueForPrompt(message);
-    streamResponse(message, useProcessingPrelude);
+    const shouldSpeakReply = FRONTEND_TTS_AUTOPLAY || speakNextReplyArmed;
+    speakNextReplyArmed = false;
+    renderSpeakNextState();
+
+    const useProcessingPrelude = shouldSpeakReply && countWords(message) > PROCESSING_WORD_THRESHOLD;
+    if (shouldSpeakReply) {
+        queueProcessingCueForPrompt(message);
+    }
+    streamResponse(message, shouldSpeakReply, useProcessingPrelude);
 });
 
 /* ---------------- Streaming ---------------- */
 
-function streamResponse(message, useProcessingPrelude = false) {
+function streamResponse(message, shouldSpeakReply = false, useProcessingPrelude = false) {
 
     const msg = document.createElement("div");
     msg.className = "message assistant";
@@ -2007,7 +2034,7 @@ function streamResponse(message, useProcessingPrelude = false) {
             stopBtn.disabled = true;
             setAvatarState("smiling");
 
-            cacheAssistantAudio(assistantText, speakerButton, useProcessingPrelude);
+            cacheAssistantAudio(assistantText, speakerButton, useProcessingPrelude, shouldSpeakReply);
             resetUi();
         }
 
