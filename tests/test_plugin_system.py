@@ -12,7 +12,7 @@ class PluginManagerTests(unittest.TestCase):
     def test_manager_loads_manifest_driven_plugin_and_registers_command(self):
         manager = PluginManager(
             Path(__file__).resolve().parents[1] / "plugins",
-            {"config": {"plugins": {"weather": {"provider": "demo"}}}},
+            {"config": {"plugins": {"weather": {"provider": "open-meteo"}}}},
             trusted_plugins={"weather"},
         )
 
@@ -20,6 +20,7 @@ class PluginManagerTests(unittest.TestCase):
 
         self.assertEqual(loaded, ["weather"])
         self.assertEqual(manager.command_registry["/weather"], "weather")
+        self.assertEqual(manager.tool_registry["weather.get_current_weather"], "weather")
 
     def test_manager_rejects_incompatible_plugin_api_version(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -58,11 +59,34 @@ class StreamPluginIntegrationTests(unittest.TestCase):
         cls.client = cls.main.app.test_client()
 
     def test_plugin_command_is_routed_by_manager(self):
-        response = self.client.post("/stream", json={"message": "/weather Seattle"})
+        weather_payload = {
+            "results": [{"name": "Seattle", "admin1": "Washington", "country": "United States", "latitude": 47.61, "longitude": -122.33}],
+        }
+        forecast_payload = {
+            "current": {
+                "temperature_2m": 14.2,
+                "apparent_temperature": 13.5,
+                "relative_humidity_2m": 76,
+                "weather_code": 3,
+                "wind_speed_10m": 11.4,
+            },
+            "current_units": {
+                "temperature_2m": "C",
+                "relative_humidity_2m": "%",
+                "wind_speed_10m": "km/h",
+            },
+        }
+
+        with mock.patch.object(
+            self.main.PLUGIN_MANAGER.runtimes["weather"].instance,
+            "_fetch_json",
+            side_effect=[weather_payload, forecast_payload],
+        ):
+            response = self.client.post("/stream", json={"message": "/weather Seattle"})
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("Weather plugin (demo) is configured for Seattle.", body)
+        self.assertIn("Seattle, Washington, United States: Overcast", body)
 
     def test_before_and_after_response_hooks_are_dispatched(self):
         with mock.patch.object(

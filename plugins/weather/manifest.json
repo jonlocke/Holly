@@ -1,11 +1,11 @@
 {
   "id": "weather",
   "name": "Weather Plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "plugin_api_version": "1.0",
   "entrypoint": "plugins.weather.plugin:Plugin",
-  "description": "Example manifest-driven plugin with a strict command and hook contract.",
+  "description": "Weather plugin backed by Open-Meteo geocoding and forecast APIs.",
   "required_config_keys": ["provider"],
-  "permissions": ["messaging"],
+  "permissions": ["messaging", "network"],
   "enabled": true
 }

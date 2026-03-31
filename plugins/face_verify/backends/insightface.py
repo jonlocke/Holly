@@ -116,8 +116,7 @@ class InsightFaceBackend:
         normalized_signature = self._normalize_signature(signature)
         store = self._read_store()
         user_entry = store.setdefault("users", {}).setdefault(user_id, {})
-        signatures = user_entry.setdefault("capture_signatures", [])
-        signatures.append(normalized_signature)
+        user_entry["capture_signatures"] = [normalized_signature]
         user_entry["updated_at"] = int(time.time())
         self._write_store(store)
         return self.model_version

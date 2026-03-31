@@ -546,6 +546,17 @@ textarea::placeholder {
     gap: 2px;
 }
 
+.admin-user-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.admin-password-input {
+    min-width: 160px;
+}
+
 .admin-reenroll-btn {
     flex: 0 0 auto;
 }
@@ -994,8 +1005,15 @@ body.cyberpunk .typing span {
         align-items: stretch;
     }
 
+    .admin-user-actions {
+        justify-content: stretch;
+    }
+
+    .admin-password-input,
+    .admin-user-actions .control-btn,
     .admin-reenroll-btn {
         width: 100%;
+        max-width: none;
     }
 }
 

@@ -810,7 +810,7 @@ HELP_MESSAGE = """Available commands:
 - /clear: Clear uploaded knowledge/context for your current session.
 - /vectordb: Show in-memory vector database statistics.
 - /git <repository-url>: Clone and index a repository for RAG queries in this session.
-- /weather [location]: Example plugin command served through the plugin manager.
+- /weather <location>: Get live weather for a location through the weather plugin.
 - /face-enroll <token>: Enroll step-up token for sensitive commands.
 - /face-verify <token>: Activate step-up window for sensitive commands.
 - /face-status: Show current face-verify status.
@@ -840,7 +840,7 @@ PLUGIN_TRUSTED_ALLOWLIST = {
 HOLLY_PLUGIN_CONFIG = {
     "plugins": {
         "weather": {
-            "provider": os.environ.get("HOLLY_WEATHER_PROVIDER", "demo").strip() or "demo",
+            "provider": os.environ.get("HOLLY_WEATHER_PROVIDER", "open-meteo").strip() or "open-meteo",
         },
         "face_verify": {
             "store_path": os.environ.get(
@@ -867,6 +867,7 @@ HOLLY_APP_CONTEXT = {
     "app": app,
     "config": HOLLY_PLUGIN_CONFIG,
     "logger": logger,
+    "validate_outbound_http_url": _validate_outbound_http_url,
 }
 PLUGIN_MANAGER = PluginManager(
     Path(__file__).with_name("plugins"),
@@ -1042,7 +1043,7 @@ def _current_epoch_seconds() -> int:
 def _current_authenticated_user() -> dict[str, str | int] | None:
     expires_at = int(session.get("auth_expires_at") or 0)
     if expires_at <= _current_epoch_seconds():
-        for key in ("auth_user_id", "auth_username", "auth_display_name", "auth_role", "auth_expires_at", "step_up_expires_at"):
+        for key in ("auth_user_id", "auth_username", "auth_display_name", "auth_role", "auth_has_password", "auth_expires_at", "step_up_expires_at"):
             session.pop(key, None)
         return None
 
@@ -1056,6 +1057,7 @@ def _current_authenticated_user() -> dict[str, str | int] | None:
         "username": str(username),
         "display_name": str(session.get("auth_display_name") or username),
         "role": str(role),
+        "has_password": bool(session.get("auth_has_password", False)),
         "expires_at": expires_at,
     }
 
@@ -1087,6 +1089,7 @@ def _set_authenticated_user(user: dict[str, Any]) -> None:
     session["auth_username"] = user["username"]
     session["auth_display_name"] = user["display_name"]
     session["auth_role"] = user["role"]
+    session["auth_has_password"] = bool(user.get("has_password", False))
     session["auth_expires_at"] = expires_at
     session["step_up_expires_at"] = 0
 
@@ -1098,7 +1101,7 @@ def _set_step_up_verified() -> int:
 
 
 def _clear_authenticated_user() -> None:
-    for key in ("auth_user_id", "auth_username", "auth_display_name", "auth_role", "auth_expires_at", "step_up_expires_at"):
+    for key in ("auth_user_id", "auth_username", "auth_display_name", "auth_role", "auth_has_password", "auth_expires_at", "step_up_expires_at"):
         session.pop(key, None)
 
 
@@ -1413,10 +1416,51 @@ def auth_status():
     return jsonify(_auth_status_payload()), 200
 
 
+@app.route("/auth/login", methods=["POST"])
+def auth_login():
+    payload = request.get_json(silent=True) or {}
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+
+    try:
+        user = IDENTITY_STORE.authenticate_user(username, password)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    if not user:
+        return jsonify({"error": "Invalid username or password."}), 401
+
+    _set_authenticated_user(user)
+    return jsonify({"ok": True, "auth": _auth_status_payload()}), 200
+
+
 @app.route("/auth/logout", methods=["POST"])
 def auth_logout():
     _clear_authenticated_user()
     return jsonify(_auth_status_payload()), 200
+
+
+@app.route("/auth/password", methods=["POST"])
+def auth_change_password():
+    authenticated_user = _current_authenticated_user()
+    if not authenticated_user:
+        return jsonify({"error": "Authenticated session required."}), 401
+
+    payload = request.get_json(silent=True) or {}
+    current_password = str(payload.get("current_password") or "")
+    new_password = str(payload.get("new_password") or "")
+
+    try:
+        user = IDENTITY_STORE.change_user_password(
+            str(authenticated_user["username"]),
+            current_password,
+            new_password,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    _set_authenticated_user(user)
+    return jsonify({"ok": True, "user": user, "auth": _auth_status_payload()}), 200
 
 
 @app.route("/admin/login", methods=["POST"])
@@ -1469,6 +1513,22 @@ def admin_users():
     return jsonify({"ok": True, "user": user, "users": IDENTITY_STORE.list_users()}), 201
 
 
+@app.route("/admin/users/<username>/password", methods=["POST"])
+def admin_reset_user_password(username: str):
+    if not _is_admin_session_active():
+        return jsonify({"error": "Admin session required."}), 401
+
+    payload = request.get_json(silent=True) or {}
+    new_password = str(payload.get("new_password") or "")
+
+    try:
+        user = IDENTITY_STORE.set_user_password(username, new_password)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({"ok": True, "user": user, "users": IDENTITY_STORE.list_users()}), 200
+
+
 @app.route("/face-capture", methods=["POST"])
 def face_capture():
     payload = request.get_json(silent=True) or {}
@@ -1499,6 +1559,7 @@ def face_capture():
 
     try:
         if action == "enroll":
+            authenticated_user = _current_authenticated_user()
             if username:
                 if not _is_admin_session_active():
                     return jsonify({"error": "Admin session required for user enrollment."}), 401
@@ -1508,6 +1569,13 @@ def face_capture():
                 result = instance.enroll_user_capture(target_user["user_id"], signature)
                 result["user"] = target_user
                 result["users"] = IDENTITY_STORE.list_users()
+            elif mode == "self-enroll":
+                if not authenticated_user:
+                    return jsonify({"error": "Authenticated session required for self re-enrollment."}), 401
+                result = instance.enroll_user_capture(str(authenticated_user["user_id"]), signature)
+                result["user"] = authenticated_user
+                result["content"] = f"Face enrollment updated for {authenticated_user['display_name']}."
+                result["auth"] = _auth_status_payload()
             else:
                 result = instance.enroll_capture(context, signature)
         else:
@@ -1902,6 +1970,72 @@ def speech_to_text_proxy():
 
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _available_tool_specs() -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    for tool_name, plugin_id in sorted(PLUGIN_MANAGER.tool_registry.items()):
+        runtime = PLUGIN_MANAGER.runtimes.get(plugin_id)
+        tool_meta = ((getattr(getattr(runtime, "instance", None), "tools", None) or {}).get(tool_name) or {})
+        specs.append(
+            {
+                "name": tool_name,
+                "description": str(tool_meta.get("description") or "").strip(),
+                "input_schema": tool_meta.get("input_schema") or {},
+            }
+        )
+    return specs
+
+
+def _tool_selection_prompt(tool_specs: list[dict[str, Any]], user_prompt: str) -> str:
+    return (
+        "You may optionally call one tool before answering.\n"
+        "If a tool is needed, respond with only valid JSON in this exact shape: "
+        '{"tool":"tool.name","arguments":{"key":"value"}}'
+        "\nIf no tool is needed, answer the user normally.\n\n"
+        f"Available tools:\n{json.dumps(tool_specs, ensure_ascii=False)}\n\n"
+        f"User request:\n{user_prompt}"
+    )
+
+
+def _parse_llm_tool_request(response_text: str) -> dict[str, Any] | None:
+    candidate = (response_text or "").strip()
+    if not candidate.startswith("{") or not candidate.endswith("}"):
+        return None
+
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    tool_name = str(payload.get("tool") or "").strip()
+    arguments = payload.get("arguments")
+    if not tool_name or not isinstance(arguments, dict):
+        return None
+
+    return {"tool": tool_name, "arguments": arguments}
+
+
+def _build_tool_result_prompt(
+    user_prompt: str,
+    tool_name: str,
+    tool_arguments: dict[str, Any],
+    tool_result: dict[str, Any],
+) -> str:
+    tool_payload = {
+        "tool": tool_name,
+        "arguments": tool_arguments,
+        "result": tool_result,
+    }
+    return (
+        "Answer the user using the tool result below. "
+        "Be direct, mention the location and conditions, and do not claim to have used any other tools.\n\n"
+        f"Original user request:\n{user_prompt}\n\n"
+        f"Tool result:\n{json.dumps(tool_payload, ensure_ascii=False)}"
+    )
 
 
 @app.route("/stream", methods=["POST"])
@@ -2450,6 +2584,39 @@ def stream():
                 prompt_prefix = result.get("prompt_prefix")
                 if prompt_prefix:
                     final_prompt = f"{prompt_prefix}\n\n{final_prompt}"
+
+            tool_specs = _available_tool_specs()
+            if tool_specs:
+                first_pass_chunks = list(
+                    _stream_chat_tokens(
+                        _tool_selection_prompt(tool_specs, final_prompt),
+                        session_id=session_id,
+                    )
+                )
+                first_pass_text = "".join(first_pass_chunks).strip()
+                tool_request = _parse_llm_tool_request(first_pass_text)
+                if tool_request:
+                    tool_result = PLUGIN_MANAGER.dispatch_tool(
+                        tool_request["tool"],
+                        tool_request["arguments"],
+                        stream_context,
+                    )
+                    if tool_result is None:
+                        yield sse({"type": "error", "error": f"Tool '{tool_request['tool']}' is unavailable."})
+                        return
+
+                    final_prompt = _build_tool_result_prompt(
+                        user_message,
+                        tool_request["tool"],
+                        tool_request["arguments"],
+                        tool_result,
+                    )
+                else:
+                    response_chunks.append(first_pass_text)
+                    yield sse({"type": "token", "content": first_pass_text})
+                    PLUGIN_MANAGER.dispatch_after_response("".join(response_chunks), stream_context)
+                    yield sse({"type": "done"})
+                    return
 
             for content in _stream_chat_tokens(final_prompt, session_id=session_id):
                 response_chunks.append(content)

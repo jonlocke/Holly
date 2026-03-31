@@ -48,6 +48,7 @@
                 <button type="button" id="stop-btn" disabled>Stop</button>
                 <button type="button" id="upload-btn" class="control-btn">Upload file</button>
                 <button type="button" id="face-verify-btn" class="control-btn">Verify Face</button>
+                <button type="button" id="account-btn" class="control-btn">Account</button>
                 <button type="button" id="logout-btn" class="control-btn">Logout</button>
             </div>
             <button type="button" id="mic-btn" class="control-btn" aria-pressed="false" title="Enable microphone">🎤</button>
@@ -61,10 +62,12 @@
 
 <div id="auth-gate" class="auth-gate">
     <div class="auth-gate-card">
-        <h1>Face Sign-In</h1>
-        <p class="auth-gate-copy">Enter your username and verify your pre-enrolled face to unlock Holly.</p>
+        <h1>Sign In</h1>
+        <p class="auth-gate-copy">Use your password or verify your pre-enrolled face to unlock Holly.</p>
         <div class="auth-gate-actions">
             <input id="login-username-input" class="auth-input" type="text" placeholder="username" autocomplete="username" />
+            <input id="login-password-input" class="auth-input" type="password" placeholder="password" autocomplete="current-password" />
+            <button type="button" id="login-password-btn" class="control-btn">Sign In With Password</button>
             <button type="button" id="login-face-btn" class="control-btn">Verify Face To Sign In</button>
             <button type="button" id="open-admin-btn" class="control-btn">Admin</button>
         </div>
@@ -87,10 +90,29 @@
         <div id="admin-create-row" class="admin-create-row" hidden>
             <input id="admin-create-username" class="auth-input auth-input-compact" type="text" placeholder="new username" />
             <input id="admin-create-display-name" class="auth-input auth-input-compact" type="text" placeholder="display name" />
+            <input id="admin-create-password" class="auth-input auth-input-compact" type="password" placeholder="initial password (optional)" />
             <button type="button" id="admin-create-user-btn" class="control-btn">Create User</button>
         </div>
         <div id="admin-status" class="face-modal-status" aria-live="polite"></div>
         <div id="admin-users-list" class="admin-users-list" hidden></div>
+    </div>
+</div>
+
+<div id="account-modal" class="face-modal" hidden>
+    <div class="face-modal-card admin-modal-card" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+        <div class="face-modal-header">
+            <h2 id="account-modal-title">My Account</h2>
+            <button type="button" id="account-close-btn" class="control-btn">Close</button>
+        </div>
+        <div class="admin-create-row">
+            <input id="account-current-password" class="auth-input auth-input-compact" type="password" placeholder="current password" autocomplete="current-password" />
+            <input id="account-new-password" class="auth-input auth-input-compact" type="password" placeholder="new password" autocomplete="new-password" />
+            <button type="button" id="account-password-btn" class="control-btn">Change Password</button>
+        </div>
+        <div class="admin-create-row">
+            <button type="button" id="account-face-btn" class="control-btn">Re-enroll My Face</button>
+        </div>
+        <div id="account-status" class="face-modal-status" aria-live="polite"></div>
     </div>
 </div>
 
@@ -153,6 +175,8 @@ const faceModalStatus = document.getElementById("face-modal-status");
 const faceModalCopy = document.getElementById("face-modal-copy");
 const authGate = document.getElementById("auth-gate");
 const loginUsernameInput = document.getElementById("login-username-input");
+const loginPasswordInput = document.getElementById("login-password-input");
+const loginPasswordBtn = document.getElementById("login-password-btn");
 const loginFaceBtn = document.getElementById("login-face-btn");
 const authGateStatus = document.getElementById("auth-gate-status");
 const openAdminBtn = document.getElementById("open-admin-btn");
@@ -166,9 +190,18 @@ const adminLogoutBtn = document.getElementById("admin-logout-btn");
 const adminCreateRow = document.getElementById("admin-create-row");
 const adminCreateUsername = document.getElementById("admin-create-username");
 const adminCreateDisplayName = document.getElementById("admin-create-display-name");
+const adminCreatePassword = document.getElementById("admin-create-password");
 const adminCreateUserBtn = document.getElementById("admin-create-user-btn");
 const adminStatus = document.getElementById("admin-status");
 const adminUsersList = document.getElementById("admin-users-list");
+const accountBtn = document.getElementById("account-btn");
+const accountModal = document.getElementById("account-modal");
+const accountCloseBtn = document.getElementById("account-close-btn");
+const accountCurrentPassword = document.getElementById("account-current-password");
+const accountNewPassword = document.getElementById("account-new-password");
+const accountPasswordBtn = document.getElementById("account-password-btn");
+const accountFaceBtn = document.getElementById("account-face-btn");
+const accountStatus = document.getElementById("account-status");
 const asciiRainCanvas = document.getElementById("ascii-rain");
 const hollyAvatar = document.getElementById("holly-avatar");
 
@@ -293,7 +326,9 @@ const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }}
 const ROUTES = {
     stream: appUrl("/stream"),
     authStatus: appUrl("/auth-status"),
+    authLogin: appUrl("/auth/login"),
     authLogout: appUrl("/auth/logout"),
+    authPassword: appUrl("/auth/password"),
     adminLogin: appUrl("/admin/login"),
     adminLogout: appUrl("/admin/logout"),
     adminUsers: appUrl("/admin/users"),
@@ -396,6 +431,10 @@ function setAdminStatus(message) {
     adminStatus.textContent = message || "";
 }
 
+function setAccountStatus(message) {
+    accountStatus.textContent = message || "";
+}
+
 function renderAdminUsers(users) {
     if (!Array.isArray(users) || !users.length) {
         adminUsersList.innerHTML = "<p class=\"auth-gate-copy\">No users yet.</p>";
@@ -409,14 +448,30 @@ function renderAdminUsers(users) {
                         <strong>${user.display_name}</strong>
                         <span>@${user.username}</span>
                         <span>${user.role}</span>
+                        <span>${user.has_password ? "password set" : "no password"}</span>
                     </div>
-                    <button
-                        type="button"
-                        class="control-btn admin-reenroll-btn"
-                        data-username="${user.username}"
-                    >
-                        Re-enroll Face
-                    </button>
+                    <div class="admin-user-actions">
+                        <input
+                            type="password"
+                            class="auth-input auth-input-compact admin-password-input"
+                            data-username="${user.username}"
+                            placeholder="new password"
+                        />
+                        <button
+                            type="button"
+                            class="control-btn admin-password-reset-btn"
+                            data-username="${user.username}"
+                        >
+                            Reset Password
+                        </button>
+                        <button
+                            type="button"
+                            class="control-btn admin-reenroll-btn"
+                            data-username="${user.username}"
+                        >
+                            Re-enroll Face
+                        </button>
+                    </div>
                 </div>
             `
         )
@@ -427,9 +482,13 @@ function renderAuthState(nextAuthState) {
     authState = nextAuthState;
     const authenticated = Boolean(authState?.authenticated);
     const adminAuthenticated = Boolean(authState?.adminAuthenticated);
+    if (!authenticated) {
+        closeAccountModal();
+    }
     authGate.hidden = authenticated;
     input.disabled = !authenticated || isStreaming;
     faceVerifyBtn.hidden = !authenticated;
+    accountBtn.hidden = !authenticated;
     logoutBtn.hidden = !authenticated;
     adminAuthRow.hidden = adminAuthenticated;
     adminCreateRow.hidden = !adminAuthenticated;
@@ -488,7 +547,26 @@ async function openAdminModal() {
 
 function closeAdminModal() {
     adminModal.hidden = true;
-    if (faceModal.hidden) {
+    if (faceModal.hidden && accountModal.hidden) {
+        document.body.classList.remove("face-modal-open");
+    }
+}
+
+function openAccountModal() {
+    if (!authState?.authenticated) {
+        setAuthGateStatus("Sign in first.");
+        return;
+    }
+    accountModal.hidden = false;
+    document.body.classList.add("face-modal-open");
+    accountCurrentPassword.value = "";
+    accountNewPassword.value = "";
+    setAccountStatus("");
+}
+
+function closeAccountModal() {
+    accountModal.hidden = true;
+    if (faceModal.hidden && adminModal.hidden) {
         document.body.classList.remove("face-modal-open");
     }
 }
@@ -505,7 +583,7 @@ function stopFaceCamera() {
 
 function closeFaceModal() {
     faceModal.hidden = true;
-    if (adminModal.hidden) {
+    if (adminModal.hidden && accountModal.hidden) {
         document.body.classList.remove("face-modal-open");
     }
     faceCapturePending = false;
@@ -527,6 +605,9 @@ async function openFaceModal(mode) {
     if (mode === "login") {
         faceModalCopy.textContent = `Verify the pre-enrolled face for ${faceCaptureUsername} to unlock the session.`;
         faceCaptureBtn.textContent = "Capture To Sign In";
+    } else if (mode === "self-enroll") {
+        faceModalCopy.textContent = "Capture a fresh face frame to replace your enrolled face.";
+        faceCaptureBtn.textContent = "Capture For Re-enroll";
     } else if (mode === "admin-enroll") {
         faceModalCopy.textContent = `Capture a face frame to enroll ${faceCaptureUsername}.`;
         faceCaptureBtn.textContent = "Capture For Enroll";
@@ -602,7 +683,7 @@ async function submitFaceCapture() {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                action: faceCaptureMode === "admin-enroll" ? "enroll" : "verify",
+                action: faceCaptureMode === "admin-enroll" || faceCaptureMode === "self-enroll" ? "enroll" : "verify",
                 mode: faceCaptureMode,
                 liveness: "pass",
                 username: faceCaptureUsername || undefined,
@@ -629,6 +710,9 @@ async function submitFaceCapture() {
         }
         if (faceCaptureMode === "admin-enroll" && faceCaptureUsername) {
             setAdminStatus(`Face enrolled for ${faceCaptureUsername}.`);
+        }
+        if (faceCaptureMode === "self-enroll") {
+            setAccountStatus("Your enrolled face has been updated.");
         }
         closeFaceModal();
     } catch (error) {
@@ -1716,17 +1800,58 @@ loginFaceBtn.addEventListener("click", () => {
     openFaceModal("login");
 });
 
+loginPasswordBtn.addEventListener("click", async () => {
+    setAuthGateStatus("Signing in…");
+    try {
+        const response = await fetch(ROUTES.authLogin, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                username: loginUsernameInput.value.trim(),
+                password: loginPasswordInput.value,
+            }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload?.error || "Sign-in failed.");
+        }
+        renderAuthState(payload.auth);
+        loginPasswordInput.value = "";
+        setAuthGateStatus("");
+        setFaceStatus(`Signed in as ${payload.auth.user.display_name}.`);
+    } catch (error) {
+        setAuthGateStatus(error.message || "Sign-in failed.");
+    }
+});
+
 openAdminBtn.addEventListener("click", () => {
     openAdminModal();
+});
+
+accountBtn.addEventListener("click", () => {
+    openAccountModal();
 });
 
 adminCloseBtn.addEventListener("click", () => {
     closeAdminModal();
 });
 
+accountCloseBtn.addEventListener("click", () => {
+    closeAccountModal();
+});
+
 adminModal.addEventListener("click", (event) => {
     if (event.target === adminModal) {
         closeAdminModal();
+    }
+});
+
+accountModal.addEventListener("click", (event) => {
+    if (event.target === accountModal) {
+        closeAccountModal();
     }
 });
 
@@ -1787,14 +1912,17 @@ adminCreateUserBtn.addEventListener("click", async () => {
             body: JSON.stringify({
                 username: adminCreateUsername.value.trim(),
                 display_name: adminCreateDisplayName.value.trim(),
+                password: adminCreatePassword.value,
             }),
         });
         const payload = await response.json();
         if (!response.ok) {
             throw new Error(payload?.error || "Unable to create user.");
         }
-        adminEnrollUsername.value = payload.user.username;
         renderAdminUsers(payload.users);
+        adminCreateUsername.value = "";
+        adminCreateDisplayName.value = "";
+        adminCreatePassword.value = "";
         setAdminStatus(`Created user ${payload.user.username}.`);
     } catch (error) {
         setAdminStatus(error.message || "Unable to create user.");
@@ -1802,22 +1930,86 @@ adminCreateUserBtn.addEventListener("click", async () => {
 });
 
 adminUsersList.addEventListener("click", (event) => {
-    const button = event.target.closest(".admin-reenroll-btn");
-    if (!button) {
+    const reenrollButton = event.target.closest(".admin-reenroll-btn");
+    const passwordResetButton = event.target.closest(".admin-password-reset-btn");
+    if (!reenrollButton && !passwordResetButton) {
         return;
     }
     if (!authState?.adminAuthenticated) {
         setAdminStatus("Admin session required.");
         return;
     }
-    const username = String(button.dataset.username || "").trim().toLowerCase();
+    const username = String((reenrollButton || passwordResetButton).dataset.username || "").trim().toLowerCase();
     if (!username) {
         setAdminStatus("Unable to determine the selected user.");
+        return;
+    }
+    if (passwordResetButton) {
+        const passwordInput = adminUsersList.querySelector(`.admin-password-input[data-username="${username}"]`);
+        const newPassword = passwordInput?.value || "";
+        if (!newPassword) {
+            setAdminStatus(`Enter a new password for ${username}.`);
+            return;
+        }
+        fetch(`${ROUTES.adminUsers}/${encodeURIComponent(username)}/password`, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ new_password: newPassword }),
+        })
+            .then(async (response) => {
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload?.error || "Unable to reset password.");
+                }
+                passwordInput.value = "";
+                renderAdminUsers(payload.users);
+                setAdminStatus(`Password reset for ${username}.`);
+            })
+            .catch((error) => {
+                setAdminStatus(error.message || "Unable to reset password.");
+            });
         return;
     }
     faceCaptureUsername = username;
     setAdminStatus(`Ready to re-enroll face for ${username}.`);
     openFaceModal("admin-enroll");
+});
+
+accountPasswordBtn.addEventListener("click", async () => {
+    setAccountStatus("Updating password…");
+    try {
+        const response = await fetch(ROUTES.authPassword, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                current_password: accountCurrentPassword.value,
+                new_password: accountNewPassword.value,
+            }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+            throw new Error(payload?.error || "Unable to change password.");
+        }
+        renderAuthState(payload.auth);
+        accountCurrentPassword.value = "";
+        accountNewPassword.value = "";
+        setAccountStatus("Password updated.");
+        setFaceStatus("Password updated.");
+    } catch (error) {
+        setAccountStatus(error.message || "Unable to change password.");
+    }
+});
+
+accountFaceBtn.addEventListener("click", () => {
+    faceCaptureUsername = "";
+    setAccountStatus("");
+    openFaceModal("self-enroll");
 });
 
 async function uploadSelectedFile() {

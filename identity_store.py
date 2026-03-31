@@ -57,6 +57,14 @@ class IdentityStore:
             return None
         return self._public_user(user)
 
+    def authenticate_user(self, username: str, password: str) -> dict[str, Any] | None:
+        user = self.get_user_by_username(username)
+        if not user or user.get("disabled", False):
+            return None
+        if not self._verify_password(password, str(user.get("password_hash", ""))):
+            return None
+        return self._public_user(user)
+
     def list_users(self) -> list[dict[str, Any]]:
         with self._lock:
             store = self._read()
@@ -111,6 +119,26 @@ class IdentityStore:
             self._write(store)
             return self._public_user(user)
 
+    def change_user_password(self, username: str, current_password: str, new_password: str) -> dict[str, Any]:
+        normalized_username = self._normalize_username(username)
+        with self._lock:
+            store = self._read()
+            user = next((entry for entry in store["users"].values() if entry.get("username") == normalized_username), None)
+            if not user:
+                raise ValueError("User not found.")
+
+            current_hash = str(user.get("password_hash", ""))
+            if current_hash:
+                if not self._verify_password(current_password, current_hash):
+                    raise ValueError("Current password is incorrect.")
+            elif current_password:
+                raise ValueError("Current password is not set for this account.")
+
+            user["password_hash"] = self._hash_password(new_password)
+            user["updated_at"] = int(time.time())
+            self._write(store)
+            return self._public_user(user)
+
     def _public_user(self, user: dict[str, Any]) -> dict[str, Any]:
         return {
             "user_id": user["user_id"],
@@ -118,6 +146,7 @@ class IdentityStore:
             "display_name": user["display_name"],
             "role": user["role"],
             "disabled": bool(user.get("disabled", False)),
+            "has_password": bool(user.get("password_hash")),
             "created_at": int(user.get("created_at", 0)),
             "updated_at": int(user.get("updated_at", 0)),
         }

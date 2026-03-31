@@ -114,6 +114,7 @@ class PluginManager:
         self.trusted_plugins = trusted_plugins or set()
         self._runtimes: dict[str, PluginRuntime] = {}
         self._command_registry: dict[str, str] = {}
+        self._tool_registry: dict[str, str] = {}
         self._lock = threading.RLock()
         self.event_bus = EventBus(self)
 
@@ -126,6 +127,11 @@ class PluginManager:
     def runtimes(self) -> dict[str, PluginRuntime]:
         with self._lock:
             return dict(self._runtimes)
+
+    @property
+    def tool_registry(self) -> dict[str, str]:
+        with self._lock:
+            return dict(self._tool_registry)
 
     def discover(self) -> list[tuple[Path, PluginManifest]]:
         manifests: list[tuple[Path, PluginManifest]] = []
@@ -193,6 +199,7 @@ class PluginManager:
             with self._lock:
                 self._runtimes.pop(manifest.id, None)
             self.event_bus.unsubscribe(manifest.id)
+            self._unregister_tools(manifest.id)
             raise
 
         logger.info("Loaded plugin '%s' version %s", manifest.id, manifest.version)
@@ -206,6 +213,7 @@ class PluginManager:
 
         self.event_bus.unsubscribe(plugin_id)
         self._unregister_commands(plugin_id)
+        self._unregister_tools(plugin_id)
         try:
             self._invoke_lifecycle(runtime, "on_unload")
         finally:
@@ -248,6 +256,32 @@ class PluginManager:
     def dispatch_after_response(self, response: str, context: dict[str, Any]) -> list[dict[str, Any]]:
         return self.event_bus.emit(EVENT_AFTER_RESPONSE, response, context)
 
+    def dispatch_tool(self, tool_name: str, arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any] | None:
+        normalized_name = str(tool_name or "").strip()
+        if not normalized_name:
+            return None
+
+        owner = self.tool_registry.get(normalized_name)
+        if not owner:
+            return None
+
+        with self._lock:
+            runtime = self._runtimes.get(owner)
+        if not runtime or not runtime.enabled:
+            return None
+
+        method = getattr(runtime.instance, "call_tool", None)
+        if not callable(method):
+            return None
+
+        try:
+            return self._call_with_timeout(runtime, method, normalized_name, arguments or {}, context)
+        except PluginTimeoutError as exc:
+            logger.warning("Plugin '%s' timed out in call_tool: %s", owner, exc)
+        except Exception as exc:
+            logger.warning("Plugin '%s' failed in call_tool: %s", owner, exc)
+        return None
+
     def _invoke_event(self, plugin_id: str, event_name: str, *args: Any, **kwargs: Any) -> dict[str, Any] | None:
         with self._lock:
             runtime = self._runtimes.get(plugin_id)
@@ -285,6 +319,10 @@ class PluginManager:
         if not isinstance(commands, dict):
             raise PluginLoadError(f"Plugin '{runtime.manifest.id}' commands must be a dict.")
 
+        tools = getattr(runtime.instance, "tools", {}) or {}
+        if not isinstance(tools, dict):
+            raise PluginLoadError(f"Plugin '{runtime.manifest.id}' tools must be a dict.")
+
         with self._lock:
             for command_name in commands:
                 normalized = self._normalize_command_name(command_name)
@@ -295,11 +333,28 @@ class PluginManager:
                     )
                 self._command_registry[normalized] = runtime.manifest.id
 
+            for tool_name in tools:
+                normalized_tool = str(tool_name or "").strip()
+                if not normalized_tool:
+                    raise PluginLoadError(f"Plugin '{runtime.manifest.id}' declared an empty tool name.")
+                existing_tool = self._tool_registry.get(normalized_tool)
+                if existing_tool and existing_tool != runtime.manifest.id:
+                    raise PluginLoadError(
+                        f"Tool '{normalized_tool}' is already registered by plugin '{existing_tool}'."
+                    )
+                self._tool_registry[normalized_tool] = runtime.manifest.id
+
     def _unregister_commands(self, plugin_id: str) -> None:
         with self._lock:
             stale_commands = [name for name, owner in self._command_registry.items() if owner == plugin_id]
             for name in stale_commands:
                 self._command_registry.pop(name, None)
+
+    def _unregister_tools(self, plugin_id: str) -> None:
+        with self._lock:
+            stale_tools = [name for name, owner in self._tool_registry.items() if owner == plugin_id]
+            for name in stale_tools:
+                self._tool_registry.pop(name, None)
 
     def _call_with_timeout(self, runtime: PluginRuntime, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         result: dict[str, Any] = {}
