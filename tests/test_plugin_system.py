@@ -110,5 +110,50 @@ class StreamPluginIntegrationTests(unittest.TestCase):
         self.assertEqual(self.main.PLUGIN_MANAGER.command_registry["/weather"], "weather")
 
 
+class SshPluginTests(unittest.TestCase):
+    def setUp(self):
+        module = importlib.import_module("plugins.ssh.plugin")
+        self.plugin = module.Plugin()
+        self.plugin.on_load(
+            {
+                "config": {
+                    "plugins": {
+                        "ssh": {
+                            "default_host": "holly-voice",
+                            "connect_timeout_seconds": 3,
+                            "command_timeout_seconds": 10,
+                        }
+                    }
+                }
+            }
+        )
+
+    def test_ssh_plugin_runs_command_and_logs_it(self):
+        completed = mock.Mock(returncode=0, stdout="ok\n", stderr="")
+
+        with mock.patch("plugins.ssh.plugin.subprocess.run", return_value=completed) as run_mock:
+            response = self.plugin.on_command("/ssh", ["hostname"], {"session_id": "s1", "username": "admin"})
+
+        self.assertEqual(response["content"], "ok")
+        run_mock.assert_called_once()
+        called_command = run_mock.call_args.args[0]
+        self.assertEqual(called_command[:3], ["ssh", "-o", "BatchMode=yes"])
+        self.assertEqual(called_command[-2:], ["holly-voice", "hostname"])
+
+    def test_ssh_plugin_tool_returns_structured_result(self):
+        completed = mock.Mock(returncode=0, stdout="linux\n", stderr="")
+
+        with mock.patch("plugins.ssh.plugin.subprocess.run", return_value=completed):
+            result = self.plugin.call_tool(
+                "ssh.run_command",
+                {"host": "example-host", "command": "uname -s"},
+                {"session_id": "s2"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["host"], "example-host")
+        self.assertEqual(result["data"]["command"], "uname -s")
+
+
 if __name__ == "__main__":
     unittest.main()

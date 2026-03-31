@@ -310,6 +310,41 @@ class StreamAndGitEndpointTests(unittest.TestCase):
             },
         )
 
+    def test_tool_request_parser_normalizes_ssh_aliases(self):
+        payload = self.main._parse_llm_tool_request(
+            '\n\n{"tool":"ssh","arguments":{"host":"holly-voice","command":"hostname"}}'
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "tool": "ssh.run_command",
+                "arguments": {"host": "holly-voice", "command": "hostname"},
+            },
+        )
+
+    def test_tool_selection_prompt_requires_verbatim_command_arguments(self):
+        prompt = self.main._tool_selection_prompt(
+            [
+                {
+                    "name": "ssh.run_command",
+                    "description": "Run a command over SSH on a configured host.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "command": {"type": "string"},
+                            "host": {"type": "string"},
+                        },
+                        "required": ["command"],
+                    },
+                }
+            ],
+            "Run hostname on holly-voice over ssh.",
+        )
+
+        self.assertIn("copy that value verbatim from the user request", prompt)
+        self.assertIn("Do not rewrite, expand, explain, or invent arguments.", prompt)
+
     def test_git_api_requires_configured_server_token(self):
         api_client = self.main.app.test_client(use_cookies=False)
         with mock.patch.object(self.main, "GIT_ENDPOINT_TOKEN", ""):
