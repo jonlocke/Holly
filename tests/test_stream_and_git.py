@@ -278,6 +278,38 @@ class StreamAndGitEndpointTests(unittest.TestCase):
             mock.ANY,
         )
 
+    def test_tool_request_parser_accepts_fenced_json_with_alias_tool_name(self):
+        payload = self.main._parse_llm_tool_request(
+            """
+            To get the weather, use this:
+
+            ```json
+            {"tool":"Weather","arguments":{"location":"London"}}
+            ```
+            """
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "tool": "weather.get_current_weather",
+                "arguments": {"location": "London"},
+            },
+        )
+
+    def test_tool_request_parser_accepts_embedded_json_object(self):
+        payload = self.main._parse_llm_tool_request(
+            'I should call {"tool":"get_current_weather","arguments":{"location":"Seattle"}} before answering.'
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "tool": "weather.get_current_weather",
+                "arguments": {"location": "Seattle"},
+            },
+        )
+
     def test_git_api_requires_configured_server_token(self):
         api_client = self.main.app.test_client(use_cookies=False)
         with mock.patch.object(self.main, "GIT_ENDPOINT_TOKEN", ""):
