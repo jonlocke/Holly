@@ -1999,24 +1999,50 @@ def _tool_selection_prompt(tool_specs: list[dict[str, Any]], user_prompt: str) -
 
 
 def _parse_llm_tool_request(response_text: str) -> dict[str, Any] | None:
-    candidate = (response_text or "").strip()
-    if not candidate.startswith("{") or not candidate.endswith("}"):
+    text = (response_text or "").strip()
+    if not text:
         return None
 
-    try:
-        payload = json.loads(candidate)
-    except json.JSONDecodeError:
-        return None
+    decoder = json.JSONDecoder()
+    candidates: list[str] = []
 
-    if not isinstance(payload, dict):
-        return None
+    fenced_blocks = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    candidates.extend(block.strip() for block in fenced_blocks if block.strip())
 
-    tool_name = str(payload.get("tool") or "").strip()
-    arguments = payload.get("arguments")
-    if not tool_name or not isinstance(arguments, dict):
-        return None
+    for start_index, character in enumerate(text):
+        if character != "{":
+            continue
+        try:
+            payload, end_index = decoder.raw_decode(text[start_index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            candidates.append(text[start_index : start_index + end_index].strip())
 
-    return {"tool": tool_name, "arguments": arguments}
+    alias_map = {
+        "weather": "weather.get_current_weather",
+        "get_current_weather": "weather.get_current_weather",
+        "weather.get_weather": "weather.get_current_weather",
+    }
+
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+        if not isinstance(payload, dict):
+            continue
+
+        raw_tool_name = str(payload.get("tool") or "").strip()
+        arguments = payload.get("arguments")
+        if not raw_tool_name or not isinstance(arguments, dict):
+            continue
+
+        normalized_tool_name = alias_map.get(raw_tool_name.strip().lower(), raw_tool_name)
+        return {"tool": normalized_tool_name, "arguments": arguments}
+
+    return None
 
 
 def _build_tool_result_prompt(
