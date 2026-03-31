@@ -15,6 +15,7 @@ class Plugin:
     # Unknown commands fall back to DEFAULT_RISK_LEVEL to keep behavior deterministic.
     COMMAND_RISK_MAP = {
         "/git": "high",
+        "/ssh": "high",
         "/reboot": "critical",
         "/restart": "critical",
         "/shutdown": "critical",

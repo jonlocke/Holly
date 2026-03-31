@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
+
+logger = logging.getLogger(__name__)
 
 
 WEATHER_CODE_LABELS = {
@@ -76,6 +79,7 @@ class Plugin:
                 "content": "Usage: /weather <location>",
             }
 
+        self._log_invocation("command", location, context)
         weather = self._lookup_weather(location)
         return {
             "type": "command_response",
@@ -92,6 +96,7 @@ class Plugin:
         if not location:
             raise ValueError("The weather tool requires a location.")
 
+        self._log_invocation("tool", location, context)
         weather = self._lookup_weather(location)
         return {
             "ok": True,
@@ -99,6 +104,15 @@ class Plugin:
             "content": self._format_weather_summary(weather),
             "data": weather,
         }
+
+    def _log_invocation(self, source: str, location: str, context: dict[str, object] | None) -> None:
+        logger.info(
+            "Weather plugin invoked via %s for location=%r session_id=%s user=%s",
+            source,
+            location,
+            str((context or {}).get("session_id") or "unknown"),
+            str((context or {}).get("username") or (context or {}).get("user_id") or "anonymous"),
+        )
 
     def _lookup_weather(self, location: str) -> dict[str, object]:
         geocode_url = self._build_geocode_url(location)

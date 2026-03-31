@@ -834,13 +834,18 @@ QUESTION_HISTORY_FILE = Path(
 )
 PLUGIN_TRUSTED_ALLOWLIST = {
     plugin_id.strip()
-    for plugin_id in os.environ.get("PLUGIN_TRUSTED_ALLOWLIST", "weather,face_verify,acl_rbac").split(",")
+    for plugin_id in os.environ.get("PLUGIN_TRUSTED_ALLOWLIST", "weather,face_verify,acl_rbac,ssh").split(",")
     if plugin_id.strip()
 }
 HOLLY_PLUGIN_CONFIG = {
     "plugins": {
         "weather": {
             "provider": os.environ.get("HOLLY_WEATHER_PROVIDER", "open-meteo").strip() or "open-meteo",
+        },
+        "ssh": {
+            "default_host": os.environ.get("HOLLY_SSH_DEFAULT_HOST", "holly-voice").strip() or "holly-voice",
+            "connect_timeout_seconds": int(os.environ.get("HOLLY_SSH_CONNECT_TIMEOUT_SECONDS", "5")),
+            "command_timeout_seconds": int(os.environ.get("HOLLY_SSH_COMMAND_TIMEOUT_SECONDS", "15")),
         },
         "face_verify": {
             "store_path": os.environ.get(
@@ -1992,7 +1997,10 @@ def _tool_selection_prompt(tool_specs: list[dict[str, Any]], user_prompt: str) -
         "You may optionally call one tool before answering.\n"
         "If a tool is needed, respond with only valid JSON in this exact shape: "
         '{"tool":"tool.name","arguments":{"key":"value"}}'
-        "\nIf no tool is needed, answer the user normally.\n\n"
+        "\nIf no tool is needed, answer the user normally.\n"
+        "Do not use markdown, code fences, or explanatory text when returning a tool call.\n"
+        "When a tool argument is a command, shell fragment, hostname, path, URL, or other literal user-provided value, "
+        "copy that value verbatim from the user request. Do not rewrite, expand, explain, or invent arguments.\n\n"
         f"Available tools:\n{json.dumps(tool_specs, ensure_ascii=False)}\n\n"
         f"User request:\n{user_prompt}"
     )
@@ -2023,6 +2031,9 @@ def _parse_llm_tool_request(response_text: str) -> dict[str, Any] | None:
         "weather": "weather.get_current_weather",
         "get_current_weather": "weather.get_current_weather",
         "weather.get_weather": "weather.get_current_weather",
+        "ssh": "ssh.run_command",
+        "run_ssh_command": "ssh.run_command",
+        "ssh.run": "ssh.run_command",
     }
 
     for candidate in candidates:
