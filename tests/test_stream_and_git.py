@@ -250,6 +250,34 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(captured_payloads[0]["voice"], "alloy")
 
+    def test_stream_can_execute_plugin_tool_for_weather(self):
+        tool_request = '{"tool":"weather.get_current_weather","arguments":{"location":"London"}}'
+        final_answer = "It is currently overcast in London."
+
+        with mock.patch.object(
+            self.main,
+            "_stream_chat_tokens",
+            side_effect=[iter([tool_request]), iter([final_answer])],
+        ), mock.patch.object(
+            self.main.PLUGIN_MANAGER,
+            "dispatch_tool",
+            return_value={
+                "ok": True,
+                "tool_name": "weather.get_current_weather",
+                "content": "London: Overcast, 12C.",
+                "data": {"location": "London", "weather_summary": "Overcast"},
+            },
+        ) as dispatch_tool:
+            response = self.client.post("/stream", json={"message": "What's the weather in London?"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(final_answer, response.get_data(as_text=True))
+        dispatch_tool.assert_called_once_with(
+            "weather.get_current_weather",
+            {"location": "London"},
+            mock.ANY,
+        )
+
     def test_git_api_requires_configured_server_token(self):
         api_client = self.main.app.test_client(use_cookies=False)
         with mock.patch.object(self.main, "GIT_ENDPOINT_TOKEN", ""):

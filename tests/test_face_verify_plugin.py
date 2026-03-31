@@ -227,6 +227,70 @@ class FaceVerifyPluginIntegrationTests(unittest.TestCase):
         self.assertIn("Step-up verification active", payload["content"])
         self.assertIn("face match confidence", payload["content"].lower())
 
+    def test_user_can_sign_in_with_password_after_admin_sets_one(self):
+        username, _ = self._create_user_with_enrolled_face("password-login")
+        reset = self.client.post(
+            f"/admin/users/{username}/password",
+            json={"new_password": "userpass123"},
+        )
+        self.assertEqual(reset.status_code, 200)
+
+        response = self.client.post(
+            "/auth/login",
+            json={"username": username, "password": "userpass123"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["auth"]["authenticated"])
+        self.assertEqual(payload["auth"]["user"]["username"], username)
+
+    def test_signed_in_user_can_change_their_own_password(self):
+        username, _ = self._create_user_with_enrolled_face("password-change")
+        reset = self.client.post(
+            f"/admin/users/{username}/password",
+            json={"new_password": "firstpass123"},
+        )
+        self.assertEqual(reset.status_code, 200)
+
+        login = self.client.post(
+            "/auth/login",
+            json={"username": username, "password": "firstpass123"},
+        )
+        self.assertEqual(login.status_code, 200)
+
+        change = self.client.post(
+            "/auth/password",
+            json={"current_password": "firstpass123", "new_password": "secondpass123"},
+        )
+        self.assertEqual(change.status_code, 200)
+        self.assertTrue(change.get_json()["auth"]["user"]["has_password"])
+
+        self.client.post("/auth/logout")
+        relogin = self.client.post(
+            "/auth/login",
+            json={"username": username, "password": "secondpass123"},
+        )
+        self.assertEqual(relogin.status_code, 200)
+
+    def test_signed_in_user_can_reenroll_their_own_face(self):
+        username, signature = self._create_user_with_enrolled_face("self-reenroll")
+        login = self._login_user_with_face(username, signature)
+        self.assertEqual(login.status_code, 200)
+
+        updated_signature = [255 - (index % 256) for index in range(256)]
+        reenroll = self.client.post(
+            "/face-capture",
+            json={"action": "enroll", "mode": "self-enroll", "signature": updated_signature},
+        )
+        self.assertEqual(reenroll.status_code, 200)
+        self.assertIn("Face enrollment updated", reenroll.get_json()["content"])
+
+        self.client.post("/auth/logout")
+        old_login = self._login_user_with_face(username, signature)
+        self.assertEqual(old_login.status_code, 403)
+        new_login = self._login_user_with_face(username, updated_signature)
+        self.assertEqual(new_login.status_code, 200)
+
     def test_invalid_provider_fails_safe(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             manager = PluginManager(
