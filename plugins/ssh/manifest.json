@@ -1,11 +1,11 @@
 {
   "id": "ssh",
   "name": "SSH Plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "plugin_api_version": "1.0",
   "entrypoint": "plugins.ssh.plugin:Plugin",
-  "description": "Run configured SSH commands and expose them through a slash command and tool.",
-  "required_config_keys": ["default_host", "connect_timeout_seconds", "command_timeout_seconds"],
-  "permissions": ["messaging"],
+  "description": "Run configured SSH commands, persist a reusable SSH keypair, and expose them through a slash command and tool.",
+  "required_config_keys": ["default_host", "connect_timeout_seconds", "command_timeout_seconds", "key_path"],
+  "permissions": ["messaging", "filesystem"],
   "enabled": true
 }

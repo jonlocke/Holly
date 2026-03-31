@@ -11,6 +11,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
@@ -19,6 +23,7 @@ COPY main.py ./
 COPY identity_store.py ./
 COPY plugin_system.py ./
 COPY plugins ./plugins
+COPY prompts ./prompts
 COPY templates ./templates
 COPY static ./static
 

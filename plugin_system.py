@@ -278,9 +278,20 @@ class PluginManager:
             return self._call_with_timeout(runtime, method, normalized_name, arguments or {}, context)
         except PluginTimeoutError as exc:
             logger.warning("Plugin '%s' timed out in call_tool: %s", owner, exc)
+            return {
+                "ok": False,
+                "tool_name": normalized_name,
+                "error": str(exc),
+                "error_type": exc.__class__.__name__,
+            }
         except Exception as exc:
             logger.warning("Plugin '%s' failed in call_tool: %s", owner, exc)
-        return None
+            return {
+                "ok": False,
+                "tool_name": normalized_name,
+                "error": str(exc),
+                "error_type": exc.__class__.__name__,
+            }
 
     def _invoke_event(self, plugin_id: str, event_name: str, *args: Any, **kwargs: Any) -> dict[str, Any] | None:
         with self._lock:

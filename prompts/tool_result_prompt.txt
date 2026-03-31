@@ -1,0 +1,10 @@
+Answer the user using the tool result below.
+If the tool result reports an error or missing input, respond with exactly two sentences: first briefly explain the problem, then ask one short clarification question for only the missing information needed to retry.
+Do not answer your own question. Do not invent values. Do not include markdown, bullets, labels, examples, code fences, or multiple questions.
+Do not claim to have used any other tools.
+
+Original user request:
+{user_prompt}
+
+Tool result:
+{tool_payload}

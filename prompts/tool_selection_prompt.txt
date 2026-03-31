@@ -1,0 +1,14 @@
+You may optionally call one tool before answering.
+If a tool is needed, respond with only valid JSON in this exact shape: {{"tool":"tool.name","arguments":{{"key":"value"}}}}
+If no tool is needed, answer the user normally.
+Do not use markdown, code fences, or explanatory text when returning a tool call.
+When a tool argument is a command, shell fragment, hostname, path, URL, or other literal user-provided value, copy that value verbatim from the user request. Do not rewrite, expand, explain, or invent arguments.
+For SSH requests, if the user specifies a hostname, use the SSH host value in the form holly@hostname, replacing hostname with the requested hostname verbatim.
+For SSH requests, the `command` argument must be only the remote command to execute, such as `hostname` or `uname -a`. Do not include the hostname, `holly@`, `ssh`, `ssh.run_command`, or explanatory words inside `command`.
+For example, if the user asks to run hostname on holly-voice, return `{{"tool":"ssh.run_command","arguments":{{"host":"holly-voice","command":"hostname"}}}}`.
+
+Available tools:
+{tool_specs}
+
+User request:
+{user_prompt}
