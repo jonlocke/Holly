@@ -2052,8 +2052,14 @@ def _parse_llm_tool_request(response_text: str) -> dict[str, Any] | None:
         if not isinstance(payload, dict):
             continue
 
-        raw_tool_name = str(payload.get("tool") or "").strip()
+        raw_tool_value = payload.get("tool")
         arguments = payload.get("arguments")
+        if raw_tool_value is None:
+            if isinstance(arguments, dict):
+                return {"tool": None, "arguments": arguments}
+            continue
+
+        raw_tool_name = str(raw_tool_value or "").strip()
         if arguments is None and raw_tool_name:
             inferred_arguments = {key: value for key, value in payload.items() if key != "tool"}
             arguments = inferred_arguments if inferred_arguments else None
@@ -2642,47 +2648,45 @@ def stream():
                 first_pass_text = "".join(first_pass_chunks).strip()
                 tool_request = _parse_llm_tool_request(first_pass_text)
                 if tool_request:
-                    tool_name = tool_request["tool"]
-                    tool_registered = tool_name in PLUGIN_MANAGER.tool_registry
-                    tool_result = PLUGIN_MANAGER.dispatch_tool(
-                        tool_name,
-                        tool_request["arguments"],
-                        stream_context,
-                    )
-                    if tool_result is None:
-                        error_message = (
-                            f"Tool '{tool_name}' is unavailable."
-                            if not tool_registered
-                            else f"Tool '{tool_name}' failed to execute."
+                    if tool_request["tool"] is None:
+                        tool_request = None
+                    else:
+                        tool_name = tool_request["tool"]
+                        tool_registered = tool_name in PLUGIN_MANAGER.tool_registry
+                        tool_result = PLUGIN_MANAGER.dispatch_tool(
+                            tool_name,
+                            tool_request["arguments"],
+                            stream_context,
                         )
-                        tool_result = {
-                            "ok": False,
-                            "tool_name": tool_name,
-                            "error": error_message,
-                            "error_type": "ToolUnavailable" if not tool_registered else "ToolExecutionFailed",
-                        }
+                        if tool_result is None:
+                            error_message = (
+                                f"Tool '{tool_name}' is unavailable."
+                                if not tool_registered
+                                else f"Tool '{tool_name}' failed to execute."
+                            )
+                            tool_result = {
+                                "ok": False,
+                                "tool_name": tool_name,
+                                "error": error_message,
+                                "error_type": "ToolUnavailable" if not tool_registered else "ToolExecutionFailed",
+                            }
 
-                    if tool_name == "ssh.run_command" and tool_result.get("ok"):
-                        direct_content = str(tool_result.get("content") or "").strip()
-                        if direct_content:
-                            response_chunks.append(direct_content)
-                            yield sse({"type": "token", "content": direct_content})
-                            PLUGIN_MANAGER.dispatch_after_response("".join(response_chunks), stream_context)
-                            yield sse({"type": "done"})
-                            return
+                        if tool_name == "ssh.run_command" and tool_result.get("ok"):
+                            direct_content = str(tool_result.get("content") or "").strip()
+                            if direct_content:
+                                rendered_output = f"```text\n{direct_content}\n```"
+                                response_chunks.append(rendered_output)
+                                yield sse({"type": "token", "content": rendered_output})
+                                PLUGIN_MANAGER.dispatch_after_response("".join(response_chunks), stream_context)
+                                yield sse({"type": "done"})
+                                return
 
-                    final_prompt = _build_tool_result_prompt(
-                        user_message,
-                        tool_name,
-                        tool_request["arguments"],
-                        tool_result,
-                    )
-                else:
-                    response_chunks.append(first_pass_text)
-                    yield sse({"type": "token", "content": first_pass_text})
-                    PLUGIN_MANAGER.dispatch_after_response("".join(response_chunks), stream_context)
-                    yield sse({"type": "done"})
-                    return
+                        final_prompt = _build_tool_result_prompt(
+                            user_message,
+                            tool_name,
+                            tool_request["arguments"],
+                            tool_result,
+                        )
 
             for content in _stream_chat_tokens(final_prompt, session_id=session_id):
                 response_chunks.append(content)

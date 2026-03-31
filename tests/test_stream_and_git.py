@@ -278,6 +278,26 @@ class StreamAndGitEndpointTests(unittest.TestCase):
             mock.ANY,
         )
 
+    def test_stream_uses_second_pass_when_selector_returns_no_tool_json(self):
+        selector_response = '{"tool":null,"arguments":{}}'
+        final_answer = "Hello there."
+
+        with mock.patch.object(
+            self.main,
+            "_stream_chat_tokens",
+            side_effect=[iter([selector_response]), iter([final_answer])],
+        ) as stream_mock, mock.patch.object(
+            self.main.PLUGIN_MANAGER,
+            "dispatch_tool",
+        ) as dispatch_tool:
+            response = self.client.post("/stream", json={"message": "Hello there."})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn(final_answer, body)
+        dispatch_tool.assert_not_called()
+        self.assertEqual(stream_mock.call_count, 2)
+
     def test_stream_feeds_tool_error_back_to_model_for_follow_up(self):
         tool_request = '{"tool":"ssh.run_command","arguments":{"host":"holly-voice"}}'
         final_answer = "I need the command you want me to run on holly-voice."
@@ -311,6 +331,7 @@ class StreamAndGitEndpointTests(unittest.TestCase):
     def test_stream_returns_successful_ssh_tool_output_without_second_model_pass(self):
         tool_request = '{"tool":"ssh.run_command","arguments":{"host":"holly-voice","command":"hostname"}}'
         ssh_output = "holly-voice"
+        rendered_output = f"```text\n{ssh_output}\n```"
 
         with mock.patch.object(
             self.main,
@@ -330,7 +351,7 @@ class StreamAndGitEndpointTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn(ssh_output, body)
+        self.assertIn(json.dumps(rendered_output), body)
         dispatch_tool.assert_called_once_with(
             "ssh.run_command",
             {"host": "holly-voice", "command": "hostname"},
@@ -396,6 +417,19 @@ class StreamAndGitEndpointTests(unittest.TestCase):
             },
         )
 
+    def test_tool_request_parser_accepts_explicit_no_tool_json(self):
+        payload = self.main._parse_llm_tool_request(
+            '{"tool":null,"arguments":{}}'
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "tool": None,
+                "arguments": {},
+            },
+        )
+
     def test_tool_selection_prompt_requires_verbatim_command_arguments(self):
         prompt = self.main._tool_selection_prompt(
             [
@@ -417,6 +451,8 @@ class StreamAndGitEndpointTests(unittest.TestCase):
 
         self.assertIn("copy that value verbatim from the user request", prompt)
         self.assertIn("Do not rewrite, expand, explain, or invent arguments.", prompt)
+        self.assertIn('{"tool":null,"arguments":{}}', prompt)
+        self.assertIn("Do not answer the user directly in this step.", prompt)
         self.assertIn("use the SSH host value in the form holly@hostname", prompt)
         self.assertIn("the `command` argument must be only the remote command to execute", prompt)
         self.assertIn('{"tool":"ssh.run_command","arguments":{"host":"holly-voice","command":"hostname"}}', prompt)
