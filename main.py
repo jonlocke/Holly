@@ -50,6 +50,9 @@ ALLOWED_OUTBOUND_SCHEMES = {"http", "https"}
 ALLOWED_GIT_URL_SCHEMES = {"http", "https"}
 HOSTNAME_PATTERN = re.compile(r"^(?=.{1,253}$)(?!-)[a-zA-Z0-9.-]+(?<!-)$")
 GIT_EXECUTABLE = shutil.which("git")
+PROMPTS_DIR = Path(__file__).with_name("prompts")
+TOOL_SELECTION_PROMPT_PATH = PROMPTS_DIR / "tool_selection_prompt.txt"
+TOOL_RESULT_PROMPT_PATH = PROMPTS_DIR / "tool_result_prompt.txt"
 
 
 def _strip_wrapping_quotes(value: str) -> str:
@@ -832,6 +835,15 @@ QUESTION_HISTORY_LIMIT = 200
 QUESTION_HISTORY_FILE = Path(
     os.environ.get("QUESTION_HISTORY_FILE", Path(__file__).with_name("question_history.json"))
 )
+DEFAULT_IDENTITY_STORE_PATH = Path(
+    os.environ.get("HOLLY_IDENTITY_STORE_PATH", str(Path(__file__).with_name("identity_store.json")))
+)
+DEFAULT_SSH_KEY_PATH = Path(
+    os.environ.get(
+        "HOLLY_SSH_KEY_PATH",
+        str(DEFAULT_IDENTITY_STORE_PATH.parent / "ssh" / "id_ed25519"),
+    )
+)
 PLUGIN_TRUSTED_ALLOWLIST = {
     plugin_id.strip()
     for plugin_id in os.environ.get("PLUGIN_TRUSTED_ALLOWLIST", "weather,face_verify,acl_rbac,ssh").split(",")
@@ -846,6 +858,7 @@ HOLLY_PLUGIN_CONFIG = {
             "default_host": os.environ.get("HOLLY_SSH_DEFAULT_HOST", "holly-voice").strip() or "holly-voice",
             "connect_timeout_seconds": int(os.environ.get("HOLLY_SSH_CONNECT_TIMEOUT_SECONDS", "5")),
             "command_timeout_seconds": int(os.environ.get("HOLLY_SSH_COMMAND_TIMEOUT_SECONDS", "15")),
+            "key_path": str(DEFAULT_SSH_KEY_PATH),
         },
         "face_verify": {
             "store_path": os.environ.get(
@@ -898,7 +911,7 @@ AUTH_SESSION_TTL_SECONDS = int(os.environ.get("HOLLY_AUTH_SESSION_TTL_SECONDS", 
 STEP_UP_TTL_SECONDS = int(os.environ.get("HOLLY_STEP_UP_TTL_SECONDS", "120"))
 ADMIN_SESSION_TTL_SECONDS = int(os.environ.get("HOLLY_ADMIN_SESSION_TTL_SECONDS", "3600"))
 IDENTITY_STORE = IdentityStore(
-    os.environ.get("HOLLY_IDENTITY_STORE_PATH", str(Path(__file__).with_name("identity_store.json")))
+    str(DEFAULT_IDENTITY_STORE_PATH)
 )
 BOOTSTRAP_ADMIN_USERNAME = os.environ.get("HOLLY_BOOTSTRAP_ADMIN_USERNAME", "admin").strip() or "admin"
 BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("HOLLY_BOOTSTRAP_ADMIN_PASSWORD", "adminpass123").strip() or "adminpass123"
@@ -910,7 +923,7 @@ if is_local_development() or os.environ.get("HOLLY_ENABLE_BOOTSTRAP_ADMIN", "1")
         logger.warning("Unable to ensure bootstrap admin: %s", exc)
 logger.info(
     "Persistent stores configured: identity_store=%s face_verify_store=%s",
-    os.environ.get("HOLLY_IDENTITY_STORE_PATH", str(Path(__file__).with_name("identity_store.json"))),
+    str(DEFAULT_IDENTITY_STORE_PATH),
     os.environ.get("HOLLY_FACE_VERIFY_STORE_PATH", str(Path(__file__).with_name("face_verify_store.json"))),
 )
 
@@ -1993,16 +2006,10 @@ def _available_tool_specs() -> list[dict[str, Any]]:
 
 
 def _tool_selection_prompt(tool_specs: list[dict[str, Any]], user_prompt: str) -> str:
-    return (
-        "You may optionally call one tool before answering.\n"
-        "If a tool is needed, respond with only valid JSON in this exact shape: "
-        '{"tool":"tool.name","arguments":{"key":"value"}}'
-        "\nIf no tool is needed, answer the user normally.\n"
-        "Do not use markdown, code fences, or explanatory text when returning a tool call.\n"
-        "When a tool argument is a command, shell fragment, hostname, path, URL, or other literal user-provided value, "
-        "copy that value verbatim from the user request. Do not rewrite, expand, explain, or invent arguments.\n\n"
-        f"Available tools:\n{json.dumps(tool_specs, ensure_ascii=False)}\n\n"
-        f"User request:\n{user_prompt}"
+    template = TOOL_SELECTION_PROMPT_PATH.read_text(encoding="utf-8")
+    return template.format(
+        tool_specs=json.dumps(tool_specs, ensure_ascii=False),
+        user_prompt=user_prompt,
     )
 
 
@@ -2047,6 +2054,9 @@ def _parse_llm_tool_request(response_text: str) -> dict[str, Any] | None:
 
         raw_tool_name = str(payload.get("tool") or "").strip()
         arguments = payload.get("arguments")
+        if arguments is None and raw_tool_name:
+            inferred_arguments = {key: value for key, value in payload.items() if key != "tool"}
+            arguments = inferred_arguments if inferred_arguments else None
         if not raw_tool_name or not isinstance(arguments, dict):
             continue
 
@@ -2067,11 +2077,10 @@ def _build_tool_result_prompt(
         "arguments": tool_arguments,
         "result": tool_result,
     }
-    return (
-        "Answer the user using the tool result below. "
-        "Be direct, mention the location and conditions, and do not claim to have used any other tools.\n\n"
-        f"Original user request:\n{user_prompt}\n\n"
-        f"Tool result:\n{json.dumps(tool_payload, ensure_ascii=False)}"
+    template = TOOL_RESULT_PROMPT_PATH.read_text(encoding="utf-8")
+    return template.format(
+        user_prompt=user_prompt,
+        tool_payload=json.dumps(tool_payload, ensure_ascii=False),
     )
 
 
@@ -2633,18 +2642,38 @@ def stream():
                 first_pass_text = "".join(first_pass_chunks).strip()
                 tool_request = _parse_llm_tool_request(first_pass_text)
                 if tool_request:
+                    tool_name = tool_request["tool"]
+                    tool_registered = tool_name in PLUGIN_MANAGER.tool_registry
                     tool_result = PLUGIN_MANAGER.dispatch_tool(
-                        tool_request["tool"],
+                        tool_name,
                         tool_request["arguments"],
                         stream_context,
                     )
                     if tool_result is None:
-                        yield sse({"type": "error", "error": f"Tool '{tool_request['tool']}' is unavailable."})
-                        return
+                        error_message = (
+                            f"Tool '{tool_name}' is unavailable."
+                            if not tool_registered
+                            else f"Tool '{tool_name}' failed to execute."
+                        )
+                        tool_result = {
+                            "ok": False,
+                            "tool_name": tool_name,
+                            "error": error_message,
+                            "error_type": "ToolUnavailable" if not tool_registered else "ToolExecutionFailed",
+                        }
+
+                    if tool_name == "ssh.run_command" and tool_result.get("ok"):
+                        direct_content = str(tool_result.get("content") or "").strip()
+                        if direct_content:
+                            response_chunks.append(direct_content)
+                            yield sse({"type": "token", "content": direct_content})
+                            PLUGIN_MANAGER.dispatch_after_response("".join(response_chunks), stream_context)
+                            yield sse({"type": "done"})
+                            return
 
                     final_prompt = _build_tool_result_prompt(
                         user_message,
-                        tool_request["tool"],
+                        tool_name,
                         tool_request["arguments"],
                         tool_result,
                     )

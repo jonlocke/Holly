@@ -114,6 +114,23 @@ class SshPluginTests(unittest.TestCase):
     def setUp(self):
         module = importlib.import_module("plugins.ssh.plugin")
         self.plugin = module.Plugin()
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.key_path = str(Path(self.tmpdir.name) / "ssh" / "id_ed25519")
+
+        def fake_run(command, **kwargs):
+            if command[0] == "ssh-keygen":
+                private_key = Path(command[-1])
+                private_key.parent.mkdir(parents=True, exist_ok=True)
+                private_key.write_text("PRIVATE KEY", encoding="utf-8")
+                Path(f"{private_key}.pub").write_text("PUBLIC KEY", encoding="utf-8")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="ok\n", stderr="")
+
+        self.keygen_patcher = mock.patch("plugins.ssh.plugin.subprocess.run", side_effect=fake_run)
+        self.mock_run = self.keygen_patcher.start()
+        self.addCleanup(self.keygen_patcher.stop)
+
         self.plugin.on_load(
             {
                 "config": {
@@ -122,23 +139,28 @@ class SshPluginTests(unittest.TestCase):
                             "default_host": "holly-voice",
                             "connect_timeout_seconds": 3,
                             "command_timeout_seconds": 10,
+                            "key_path": self.key_path,
                         }
                     }
                 }
             }
         )
 
+    def test_ssh_plugin_generates_keypair_on_load(self):
+        self.assertTrue(Path(self.key_path).exists())
+        self.assertTrue(Path(f"{self.key_path}.pub").exists())
+
     def test_ssh_plugin_runs_command_and_logs_it(self):
         completed = mock.Mock(returncode=0, stdout="ok\n", stderr="")
-
         with mock.patch("plugins.ssh.plugin.subprocess.run", return_value=completed) as run_mock:
             response = self.plugin.on_command("/ssh", ["hostname"], {"session_id": "s1", "username": "admin"})
 
         self.assertEqual(response["content"], "ok")
         run_mock.assert_called_once()
         called_command = run_mock.call_args.args[0]
-        self.assertEqual(called_command[:3], ["ssh", "-o", "BatchMode=yes"])
-        self.assertEqual(called_command[-2:], ["holly-voice", "hostname"])
+        self.assertEqual(called_command[:3], ["ssh", "-i", self.key_path])
+        self.assertIn("IdentitiesOnly=yes", called_command)
+        self.assertEqual(called_command[-2:], ["holly@holly-voice", "hostname"])
 
     def test_ssh_plugin_tool_returns_structured_result(self):
         completed = mock.Mock(returncode=0, stdout="linux\n", stderr="")
@@ -153,6 +175,38 @@ class SshPluginTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["data"]["host"], "example-host")
         self.assertEqual(result["data"]["command"], "uname -s")
+        called_command = self.plugin._normalize_host("example-host")
+        self.assertEqual(called_command, "holly@example-host")
+
+    def test_ssh_plugin_tool_rejects_placeholder_command_values(self):
+        with self.assertRaisesRegex(ValueError, "actual remote command"):
+            self.plugin.call_tool(
+                "ssh.run_command",
+                {"host": "holly-voice", "command": "ssh"},
+                {"session_id": "s3"},
+            )
+
+        with self.assertRaisesRegex(ValueError, "actual remote command"):
+            self.plugin.call_tool(
+                "ssh.run_command",
+                {"host": "holly-voice", "command": "ssh.run_command"},
+                {"session_id": "s4"},
+            )
+
+    def test_ssh_plugin_tool_rejects_host_or_destination_as_command(self):
+        with self.assertRaisesRegex(ValueError, "not just the host"):
+            self.plugin.call_tool(
+                "ssh.run_command",
+                {"host": "holly-voice", "command": "holly-voice"},
+                {"session_id": "s5"},
+            )
+
+        with self.assertRaisesRegex(ValueError, "not just the host"):
+            self.plugin.call_tool(
+                "ssh.run_command",
+                {"host": "holly-voice", "command": "holly@holly-voice"},
+                {"session_id": "s6"},
+            )
 
 
 if __name__ == "__main__":
