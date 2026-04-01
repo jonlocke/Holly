@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, Response, jsonify, session
+from flask import Flask, render_template, request, Response, jsonify, session, make_response
 from ollama import Client
 import json
 import logging
@@ -708,7 +708,35 @@ def _list_available_tts_voices() -> tuple[str | None, list[str]]:
     return configured_voice or None, normalized_voices
 
 
-def _stream_chat_tokens(prompt: str, session_id: str | None = None):
+def _coerce_stream_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            for key in ("text", "content", "reasoning_content", "thinking"):
+                text_value = item.get(key)
+                if isinstance(text_value, str) and text_value:
+                    parts.append(text_value)
+                    break
+        return "".join(parts)
+
+    if isinstance(value, dict):
+        for key in ("text", "content", "reasoning_content", "thinking"):
+            text_value = value.get(key)
+            if isinstance(text_value, str) and text_value:
+                return text_value
+
+    return ""
+
+
+def _stream_chat_events(prompt: str, session_id: str | None = None):
     if OLLAMA_BEARER_TOKEN:
         endpoint = _validate_outbound_http_url(_openai_chat_completions_url())
         logger.info("Chat request -> POST %s (bearer auth)", endpoint)
@@ -757,9 +785,18 @@ def _stream_chat_tokens(prompt: str, session_id: str | None = None):
                         continue
                     chunk = json.loads(payload)
                     for choice in chunk.get("choices", []):
-                        content = (choice.get("delta") or {}).get("content")
+                        delta = choice.get("delta") or {}
+                        reasoning = (
+                            _coerce_stream_text(delta.get("reasoning_content"))
+                            or _coerce_stream_text(delta.get("reasoning"))
+                            or _coerce_stream_text(delta.get("thinking"))
+                        )
+                        if reasoning:
+                            yield {"type": "thinking", "content": reasoning}
+
+                        content = _coerce_stream_text(delta.get("content"))
                         if content:
-                            yield content
+                            yield {"type": "token", "content": content}
         except urllib_error.HTTPError as exc:
             details = exc.read().decode("utf-8", errors="ignore")
             if exc.code == 401:
@@ -787,9 +824,24 @@ def _stream_chat_tokens(prompt: str, session_id: str | None = None):
     )
     for chunk in stream:
         if "message" in chunk:
-            content = chunk["message"].get("content", "")
+            message = chunk["message"] or {}
+            reasoning = (
+                _coerce_stream_text(message.get("thinking"))
+                or _coerce_stream_text(message.get("reasoning"))
+                or _coerce_stream_text(message.get("reasoning_content"))
+            )
+            if reasoning:
+                yield {"type": "thinking", "content": reasoning}
+
+            content = _coerce_stream_text(message.get("content"))
             if content:
-                yield content
+                yield {"type": "token", "content": content}
+
+
+def _stream_chat_tokens(prompt: str, session_id: str | None = None):
+    for event in _stream_chat_events(prompt, session_id=session_id):
+        if event.get("type") == "token":
+            yield str(event.get("content") or "")
 
 
 MAX_MESSAGE_LENGTH = 16000
@@ -1426,7 +1478,17 @@ def _encode_multipart_form_data(fields: dict[str, str], files: list[tuple[str, s
 
 @app.route("/")
 def index():
-    return render_template("index.html", frontend_tts_autoplay=FRONTEND_TTS_AUTOPLAY)
+    response = make_response(
+        render_template(
+            "index.html",
+            frontend_tts_autoplay=FRONTEND_TTS_AUTOPLAY,
+            active_chat_model=_active_chat_model(),
+        )
+    )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/auth-status", methods=["GET"])
@@ -2688,9 +2750,12 @@ def stream():
                             tool_result,
                         )
 
-            for content in _stream_chat_tokens(final_prompt, session_id=session_id):
-                response_chunks.append(content)
-                yield sse({"type": "token", "content": content})
+            for event in _stream_chat_events(final_prompt, session_id=session_id):
+                event_type = str(event.get("type") or "")
+                event_content = str(event.get("content") or "")
+                if event_type == "token":
+                    response_chunks.append(event_content)
+                yield sse({"type": event_type, "content": event_content})
 
             PLUGIN_MANAGER.dispatch_after_response("".join(response_chunks), stream_context)
             yield sse({"type": "done"})

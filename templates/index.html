@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Holly 6000</title>
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon-holly.png') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260401-thinking-scale-4') }}" />
     <script src="{{ url_for('static', filename='vendor/marked/marked.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/dompurify/purify.min.js') }}"></script>
 </head>
@@ -24,16 +24,15 @@
     </div>
 
     <form id="chat-form" class="input-bar">
+        <div class="input-stack">
+            <div id="input-prediction" class="input-prediction"></div>
+            <textarea
+                id="user-input"
+                rows="1"
+                placeholder="Ask anything... use /help for a list of cmds"
+            ></textarea>
+        </div>
         <div class="primary-controls">
-            <div class="input-stack">
-                <div id="input-prediction" class="input-prediction"></div>
-                <textarea
-                    id="user-input"
-                    rows="1"
-                    placeholder="Ask anything... use /help for a list of cmds"
-                ></textarea>
-            </div>
-
             <button
                 type="button"
                 id="mobile-actions-toggle"
@@ -204,6 +203,10 @@ const accountFaceBtn = document.getElementById("account-face-btn");
 const accountStatus = document.getElementById("account-status");
 const asciiRainCanvas = document.getElementById("ascii-rain");
 const hollyAvatar = document.getElementById("holly-avatar");
+const frameThinkingLayer = document.createElement("div");
+frameThinkingLayer.className = "chat-thinking-layer";
+frameThinkingLayer.setAttribute("aria-hidden", "true");
+output.appendChild(frameThinkingLayer);
 
 const rainCtx = asciiRainCanvas.getContext("2d");
 const rainChars = "アカサタナハマヤラワ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ#$%&*+-<>";
@@ -320,6 +323,9 @@ let faceCaptureMode = "enroll";
 let faceCapturePending = false;
 let faceCaptureUsername = "";
 let authState = null;
+let currentModelLabel = {{ active_chat_model|tojson }};
+let footerStatusNote = "";
+let thinkingFocusMode = false;
 const MIC_AUTO_STOP_SILENCE_MS = 2000;
 const MIC_SPEECH_THRESHOLD = 0.015;
 const FRONTEND_TTS_AUTOPLAY = {{ "true" if frontend_tts_autoplay else "false" }};
@@ -416,7 +422,38 @@ function sleep(ms) {
 }
 
 function setFaceStatus(message) {
-    faceStatus.textContent = message || "";
+    footerStatusNote = message || "";
+    refreshFooterStatus();
+}
+
+function refreshFooterStatus() {
+    const parts = [];
+    if (authState?.authenticated && authState?.user?.display_name) {
+        parts.push(
+            `Signed in as ${authState.user.display_name}. Step-up is ${authState.stepUpActive ? "active" : "inactive"}.`
+        );
+    } else {
+        parts.push("Sign in with a pre-enrolled face to start chatting.");
+    }
+
+    if (currentModelLabel) {
+        parts.push(`Model: ${currentModelLabel}`);
+    }
+
+    if (footerStatusNote) {
+        parts.push(footerStatusNote);
+    }
+
+    faceStatus.textContent = parts.join(" --- ");
+}
+
+function toggleThinkingFocusMode() {
+    thinkingFocusMode = !thinkingFocusMode;
+    output.classList.toggle("thinking-focus-mode", thinkingFocusMode);
+    footerStatusNote = thinkingFocusMode
+        ? "Thinking focus is on. Click the assistant area again to show assistant bubbles."
+        : "";
+    refreshFooterStatus();
 }
 
 function setFaceModalStatus(message) {
@@ -495,11 +532,7 @@ function renderAuthState(nextAuthState) {
     adminUsersList.hidden = !adminAuthenticated;
     adminLogoutBtn.hidden = !adminAuthenticated;
     faceVerifyBtn.textContent = "Step-Up Face";
-    setFaceStatus(
-        authenticated
-            ? `Signed in as ${authState.user.display_name}. Step-up is ${authState.stepUpActive ? "active" : "inactive"}.`
-            : "Sign in with a pre-enrolled face to start chatting."
-    );
+    refreshFooterStatus();
 }
 
 async function refreshAuthState() {
@@ -1605,8 +1638,9 @@ async function announceSessionModel() {
         }
 
         const payload = await response.json();
-        if (payload?.newSession && payload?.model) {
-            appendMessage(`Session started. Model in use: ${payload.model}`, "assistant");
+        if (payload?.model) {
+            currentModelLabel = payload.model;
+            refreshFooterStatus();
         }
     } catch (error) {
         console.warn("Unable to load session info", error);
@@ -1821,7 +1855,8 @@ loginPasswordBtn.addEventListener("click", async () => {
         renderAuthState(payload.auth);
         loginPasswordInput.value = "";
         setAuthGateStatus("");
-        setFaceStatus(`Signed in as ${payload.auth.user.display_name}.`);
+        footerStatusNote = "";
+        refreshFooterStatus();
     } catch (error) {
         setAuthGateStatus(error.message || "Sign-in failed.");
     }
@@ -2061,8 +2096,12 @@ fileInput.addEventListener("change", () => {
 /* ---------------- Message Trim ---------------- */
 
 function trimMessages() {
-    while (output.children.length > MAX_MESSAGES) {
-        output.removeChild(output.firstChild);
+    const messages = Array.from(output.querySelectorAll(":scope > .message"));
+    while (messages.length > MAX_MESSAGES) {
+        const oldest = messages.shift();
+        if (oldest) {
+            output.removeChild(oldest);
+        }
     }
 }
 
@@ -2078,6 +2117,8 @@ function appendMessage(content, role) {
 
     msg.appendChild(bubble);
     output.appendChild(msg);
+    output.appendChild(frameThinkingLayer);
+    msg.scrollIntoView({ block: "start", behavior: "smooth" });
 
     trimMessages();
     safeScroll();
@@ -2119,6 +2160,13 @@ form.addEventListener("submit", async function(e) {
 /* ---------------- Streaming ---------------- */
 
 function streamResponse(message, shouldSpeakReply = false, useProcessingPrelude = false) {
+    frameThinkingLayer.textContent = "";
+    frameThinkingLayer.style.top = "0px";
+    output.scrollTop = 0;
+    thinkingFocusMode = false;
+    output.classList.remove("thinking-focus-mode");
+    footerStatusNote = "";
+    refreshFooterStatus();
 
     const msg = document.createElement("div");
     msg.className = "message assistant";
@@ -2149,6 +2197,12 @@ function streamResponse(message, shouldSpeakReply = false, useProcessingPrelude 
 
         playCachedAudio(rawChunks);
     });
+    bubble.addEventListener("dblclick", (event) => {
+        if (isInteractiveBubbleTarget(event.target)) {
+            return;
+        }
+        toggleThinkingFocusMode();
+    });
 
     // Typing indicator
     bubble.innerHTML = `
@@ -2159,6 +2213,7 @@ function streamResponse(message, shouldSpeakReply = false, useProcessingPrelude 
 
     msg.appendChild(bubble);
     output.appendChild(msg);
+    output.appendChild(frameThinkingLayer);
 
     trimMessages();
     safeScroll();
@@ -2174,6 +2229,13 @@ function streamResponse(message, shouldSpeakReply = false, useProcessingPrelude 
     let textNode = null;
     let cursorEl = null;
     let started = false;
+    let visibleAssistantText = "";
+    let streamedThinkingText = "";
+
+    const syncThinkingLayerTop = () => {
+        frameThinkingLayer.style.top = `${msg.offsetTop}px`;
+    };
+    requestAnimationFrame(syncThinkingLayerTop);
 
     const resetUi = () => {
         input.disabled = false;
@@ -2227,13 +2289,20 @@ function streamResponse(message, shouldSpeakReply = false, useProcessingPrelude 
                 started = true;
             }
 
-            textNode.nodeValue += data.content;
+            visibleAssistantText += data.content;
+            textNode.nodeValue = visibleAssistantText;
             safeScroll();
+        }
+
+        if (data.type === "thinking" && data.content) {
+            streamedThinkingText += data.content;
+            frameThinkingLayer.textContent = streamedThinkingText;
+            syncThinkingLayerTop();
         }
 
         if (data.type === "done") {
             if (!started) {
-                bubble.textContent = "";
+                bubble.innerHTML = "";
                 setAvatarState("smiling");
                 resetUi();
                 return;
@@ -2241,7 +2310,7 @@ function streamResponse(message, shouldSpeakReply = false, useProcessingPrelude 
 
             if (cursorEl) cursorEl.remove();
 
-            const assistantText = textNode.nodeValue;
+            const assistantText = visibleAssistantText;
 
             // Render markdown once
             const parsedHtml = marked.parse(assistantText);
@@ -2345,6 +2414,16 @@ announceSessionModel();
 warmProcessingSpeechCache();
 setAvatarState("smiling");
 updateMicButtonUi();
+output.addEventListener("click", (event) => {
+    if (event.target.closest(".message.user")) {
+        return;
+    }
+    if (isInteractiveBubbleTarget(event.target)) {
+        return;
+    }
+
+    toggleThinkingFocusMode();
+});
 refreshAuthState().catch((error) => {
     console.warn("Unable to load auth status", error);
     renderAuthState({ authenticated: false, adminAuthenticated: false, stepUpActive: false, user: null });

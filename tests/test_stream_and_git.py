@@ -257,7 +257,11 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         with mock.patch.object(
             self.main,
             "_stream_chat_tokens",
-            side_effect=[iter([tool_request]), iter([final_answer])],
+            side_effect=[iter([tool_request])],
+        ), mock.patch.object(
+            self.main,
+            "_stream_chat_events",
+            return_value=iter([{"type": "token", "content": final_answer}]),
         ), mock.patch.object(
             self.main.PLUGIN_MANAGER,
             "dispatch_tool",
@@ -285,8 +289,12 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         with mock.patch.object(
             self.main,
             "_stream_chat_tokens",
-            side_effect=[iter([selector_response]), iter([final_answer])],
+            side_effect=[iter([selector_response])],
         ) as stream_mock, mock.patch.object(
+            self.main,
+            "_stream_chat_events",
+            return_value=iter([{"type": "token", "content": final_answer}]),
+        ) as event_mock, mock.patch.object(
             self.main.PLUGIN_MANAGER,
             "dispatch_tool",
         ) as dispatch_tool:
@@ -296,7 +304,8 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn(final_answer, body)
         dispatch_tool.assert_not_called()
-        self.assertEqual(stream_mock.call_count, 2)
+        self.assertEqual(stream_mock.call_count, 1)
+        self.assertEqual(event_mock.call_count, 1)
 
     def test_stream_feeds_tool_error_back_to_model_for_follow_up(self):
         tool_request = '{"tool":"ssh.run_command","arguments":{"host":"holly-voice"}}'
@@ -305,7 +314,11 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         with mock.patch.object(
             self.main,
             "_stream_chat_tokens",
-            side_effect=[iter([tool_request]), iter([final_answer])],
+            side_effect=[iter([tool_request])],
+        ), mock.patch.object(
+            self.main,
+            "_stream_chat_events",
+            return_value=iter([{"type": "token", "content": final_answer}]),
         ), mock.patch.object(
             self.main.PLUGIN_MANAGER,
             "dispatch_tool",
@@ -358,6 +371,29 @@ class StreamAndGitEndpointTests(unittest.TestCase):
             mock.ANY,
         )
         self.assertEqual(stream_mock.call_count, 1)
+
+    def test_coerce_stream_text_accepts_reasoning_lists(self):
+        value = [
+            {"type": "reasoning", "text": "step one"},
+            {"type": "reasoning", "content": " and step two"},
+        ]
+
+        self.assertEqual(self.main._coerce_stream_text(value), "step one and step two")
+
+    def test_stream_chat_tokens_ignores_thinking_events(self):
+        with mock.patch.object(
+            self.main,
+            "_stream_chat_events",
+            return_value=iter(
+                [
+                    {"type": "thinking", "content": "internal"},
+                    {"type": "token", "content": "visible"},
+                ]
+            ),
+        ):
+            chunks = list(self.main._stream_chat_tokens("hello"))
+
+        self.assertEqual(chunks, ["visible"])
 
     def test_tool_request_parser_accepts_fenced_json_with_alias_tool_name(self):
         payload = self.main._parse_llm_tool_request(
