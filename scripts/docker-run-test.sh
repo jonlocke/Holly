@@ -8,7 +8,7 @@ DATA_DIR="${HOLLY_DATA_DIR:-${REPO_ROOT}/data/test}"
 "${SCRIPT_DIR}/killme.sh" holly-test || true
 mkdir -p "${DATA_DIR}"
 chmod 0777 "${DATA_DIR}"
-#export QWEN_TTS_API_BASE=http://quick-piper-endpoint:8092
+export QWEN_TTS_API_BASE=http://quick-piper-endpoint:8092
 docker run -d \
 -p 5050:5000 \
 --restart unless-stopped \

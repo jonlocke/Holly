@@ -8,6 +8,7 @@ DATA_DIR="${HOLLY_DATA_DIR:-${REPO_ROOT}/data/localai}"
 "${SCRIPT_DIR}/killme.sh" holly5005 || true
 mkdir -p "${DATA_DIR}"
 chmod 0777 "${DATA_DIR}"
+export OLLAMA_API_BASE=http://holly-voice:10000
 export QWEN_TTS_API_BASE=http://quick-piper-endpoint:8092
 docker run -d \
 --restart unless-stopped \
