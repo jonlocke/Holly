@@ -8,8 +8,8 @@ Some weaker or completion-only models do not reliably emit the exact tool identi
 
 - surrounding the JSON object with prose
 - wrapping the JSON object in Markdown fences
-- returning a simplified tool name such as `"Weather"` or `"ssh"` instead of the canonical tool id
-- returning near-miss names such as `"get_current_weather"` or `"ssh.run"`
+- returning a simplified tool name such as `"Weather"` instead of the canonical tool id
+- returning near-miss names such as `"get_current_weather"`
 - rewriting literal command arguments instead of copying them from the user request
 
 This is common with small `llama.cpp` style models that are being prompted to imitate tool calling rather than using a native tool/function calling API.
@@ -22,8 +22,6 @@ Current examples:
 
 - `weather` -> `weather.get_current_weather`
 - `get_current_weather` -> `weather.get_current_weather`
-- `ssh` -> `ssh.run_command`
-
 ## Guidance
 
 - Keep aliasing narrow and explicit.
