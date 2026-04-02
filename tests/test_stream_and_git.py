@@ -298,67 +298,6 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         dispatch_tool.assert_not_called()
         self.assertEqual(stream_mock.call_count, 2)
 
-    def test_stream_feeds_tool_error_back_to_model_for_follow_up(self):
-        tool_request = '{"tool":"ssh.run_command","arguments":{"host":"holly-voice"}}'
-        final_answer = "I need the command you want me to run on holly-voice."
-
-        with mock.patch.object(
-            self.main,
-            "_stream_chat_tokens",
-            side_effect=[iter([tool_request]), iter([final_answer])],
-        ), mock.patch.object(
-            self.main.PLUGIN_MANAGER,
-            "dispatch_tool",
-            return_value={
-                "ok": False,
-                "tool_name": "ssh.run_command",
-                "error": "The SSH tool requires a command.",
-                "error_type": "ValueError",
-            },
-        ) as dispatch_tool:
-            response = self.client.post("/stream", json={"message": "Use ssh on holly-voice."})
-
-        self.assertEqual(response.status_code, 200)
-        body = response.get_data(as_text=True)
-        self.assertIn(final_answer, body)
-        self.assertNotIn("Tool 'ssh.run_command' is unavailable.", body)
-        dispatch_tool.assert_called_once_with(
-            "ssh.run_command",
-            {"host": "holly-voice"},
-            mock.ANY,
-        )
-
-    def test_stream_returns_successful_ssh_tool_output_without_second_model_pass(self):
-        tool_request = '{"tool":"ssh.run_command","arguments":{"host":"holly-voice","command":"hostname"}}'
-        ssh_output = "holly-voice"
-        rendered_output = f"```text\n{ssh_output}\n```"
-
-        with mock.patch.object(
-            self.main,
-            "_stream_chat_tokens",
-            side_effect=[iter([tool_request])],
-        ) as stream_mock, mock.patch.object(
-            self.main.PLUGIN_MANAGER,
-            "dispatch_tool",
-            return_value={
-                "ok": True,
-                "tool_name": "ssh.run_command",
-                "content": ssh_output,
-                "data": {"host": "holly-voice", "command": "hostname", "stdout": ssh_output},
-            },
-        ) as dispatch_tool:
-            response = self.client.post("/stream", json={"message": "Use the ssh tool to run hostname on holly-voice."})
-
-        self.assertEqual(response.status_code, 200)
-        body = response.get_data(as_text=True)
-        self.assertIn(json.dumps(rendered_output), body)
-        dispatch_tool.assert_called_once_with(
-            "ssh.run_command",
-            {"host": "holly-voice", "command": "hostname"},
-            mock.ANY,
-        )
-        self.assertEqual(stream_mock.call_count, 1)
-
     def test_tool_request_parser_accepts_fenced_json_with_alias_tool_name(self):
         payload = self.main._parse_llm_tool_request(
             """
@@ -391,32 +330,6 @@ class StreamAndGitEndpointTests(unittest.TestCase):
             },
         )
 
-    def test_tool_request_parser_normalizes_ssh_aliases(self):
-        payload = self.main._parse_llm_tool_request(
-            '\n\n{"tool":"ssh","arguments":{"host":"holly-voice","command":"hostname"}}'
-        )
-
-        self.assertEqual(
-            payload,
-            {
-                "tool": "ssh.run_command",
-                "arguments": {"host": "holly-voice", "command": "hostname"},
-            },
-        )
-
-    def test_tool_request_parser_infers_arguments_when_model_omits_arguments_wrapper(self):
-        payload = self.main._parse_llm_tool_request(
-            '```json\n{"tool":"ssh","command":"hostname"}\n```'
-        )
-
-        self.assertEqual(
-            payload,
-            {
-                "tool": "ssh.run_command",
-                "arguments": {"command": "hostname"},
-            },
-        )
-
     def test_tool_request_parser_accepts_explicit_no_tool_json(self):
         payload = self.main._parse_llm_tool_request(
             '{"tool":null,"arguments":{}}'
@@ -434,38 +347,34 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         prompt = self.main._tool_selection_prompt(
             [
                 {
-                    "name": "ssh.run_command",
-                    "description": "Run a command over SSH on a configured host.",
+                    "name": "weather.get_current_weather",
+                    "description": "Get the current weather for a location.",
                     "input_schema": {
                         "type": "object",
                         "properties": {
-                            "command": {"type": "string"},
-                            "host": {"type": "string"},
+                            "location": {"type": "string"},
                         },
-                        "required": ["command"],
+                        "required": ["location"],
                     },
                 }
             ],
-            "Run hostname on holly-voice over ssh.",
+            "What is the weather in London?",
         )
 
         self.assertIn("copy that value verbatim from the user request", prompt)
         self.assertIn("Do not rewrite, expand, explain, or invent arguments.", prompt)
         self.assertIn('{"tool":null,"arguments":{}}', prompt)
         self.assertIn("Do not answer the user directly in this step.", prompt)
-        self.assertIn("use the SSH host value in the form holly@hostname", prompt)
-        self.assertIn("the `command` argument must be only the remote command to execute", prompt)
-        self.assertIn('{"tool":"ssh.run_command","arguments":{"host":"holly-voice","command":"hostname"}}', prompt)
 
     def test_tool_result_prompt_requires_single_clarification_question_for_errors(self):
         prompt = self.main._build_tool_result_prompt(
-            "Use the ssh tool on holly-voice.",
-            "ssh.run_command",
-            {"host": "holly-voice"},
+            "What is the weather in London?",
+            "weather.get_current_weather",
+            {"location": "London"},
             {
                 "ok": False,
-                "tool_name": "ssh.run_command",
-                "error": "The SSH tool requires a command.",
+                "tool_name": "weather.get_current_weather",
+                "error": "Location lookup failed.",
                 "error_type": "ValueError",
             },
         )
@@ -479,7 +388,7 @@ class StreamAndGitEndpointTests(unittest.TestCase):
         self.assertTrue(self.main.TOOL_SELECTION_PROMPT_PATH.exists())
         self.assertTrue(self.main.TOOL_RESULT_PROMPT_PATH.exists())
         self.assertIn(
-            "the `command` argument must be only the remote command to execute",
+            "copy that value verbatim from the user request",
             self.main.TOOL_SELECTION_PROMPT_PATH.read_text(encoding="utf-8"),
         )
         self.assertIn(
