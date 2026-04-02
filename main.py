@@ -890,27 +890,15 @@ QUESTION_HISTORY_FILE = Path(
 DEFAULT_IDENTITY_STORE_PATH = Path(
     os.environ.get("HOLLY_IDENTITY_STORE_PATH", str(Path(__file__).with_name("identity_store.json")))
 )
-DEFAULT_SSH_KEY_PATH = Path(
-    os.environ.get(
-        "HOLLY_SSH_KEY_PATH",
-        str(DEFAULT_IDENTITY_STORE_PATH.parent / "ssh" / "id_ed25519"),
-    )
-)
 PLUGIN_TRUSTED_ALLOWLIST = {
     plugin_id.strip()
-    for plugin_id in os.environ.get("PLUGIN_TRUSTED_ALLOWLIST", "weather,face_verify,acl_rbac,ssh").split(",")
+    for plugin_id in os.environ.get("PLUGIN_TRUSTED_ALLOWLIST", "weather,face_verify,acl_rbac").split(",")
     if plugin_id.strip()
 }
 HOLLY_PLUGIN_CONFIG = {
     "plugins": {
         "weather": {
             "provider": os.environ.get("HOLLY_WEATHER_PROVIDER", "open-meteo").strip() or "open-meteo",
-        },
-        "ssh": {
-            "default_host": os.environ.get("HOLLY_SSH_DEFAULT_HOST", "holly-voice").strip() or "holly-voice",
-            "connect_timeout_seconds": int(os.environ.get("HOLLY_SSH_CONNECT_TIMEOUT_SECONDS", "5")),
-            "command_timeout_seconds": int(os.environ.get("HOLLY_SSH_COMMAND_TIMEOUT_SECONDS", "15")),
-            "key_path": str(DEFAULT_SSH_KEY_PATH),
         },
         "face_verify": {
             "store_path": os.environ.get(
@@ -2100,9 +2088,6 @@ def _parse_llm_tool_request(response_text: str) -> dict[str, Any] | None:
         "weather": "weather.get_current_weather",
         "get_current_weather": "weather.get_current_weather",
         "weather.get_weather": "weather.get_current_weather",
-        "ssh": "ssh.run_command",
-        "run_ssh_command": "ssh.run_command",
-        "ssh.run": "ssh.run_command",
     }
 
     for candidate in candidates:
@@ -2732,16 +2717,6 @@ def stream():
                                 "error": error_message,
                                 "error_type": "ToolUnavailable" if not tool_registered else "ToolExecutionFailed",
                             }
-
-                        if tool_name == "ssh.run_command" and tool_result.get("ok"):
-                            direct_content = str(tool_result.get("content") or "").strip()
-                            if direct_content:
-                                rendered_output = f"```text\n{direct_content}\n```"
-                                response_chunks.append(rendered_output)
-                                yield sse({"type": "token", "content": rendered_output})
-                                PLUGIN_MANAGER.dispatch_after_response("".join(response_chunks), stream_context)
-                                yield sse({"type": "done"})
-                                return
 
                         final_prompt = _build_tool_result_prompt(
                             user_message,
