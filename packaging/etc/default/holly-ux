@@ -16,7 +16,8 @@ PORT=5000
 WHISPER_CPP_STT_ENDPOINT=http://holly-voice:9000/inference
 OLLAMA_API_BASE=http://holly:18789
 OLLAMA_MODEL=holly:v1.0.0
-OLLAMA_BEARER_TOKEN=REDACTED
+# Set OLLAMA_BEARER_TOKEN in a local env file (for example ~/.myenv or packaging/etc/default/holly-ux.local); do not commit real tokens.
+OLLAMA_BEARER_TOKEN=
 QWEN3_TTS_SPEAK_QUERY="return_audio=true&play=false"
 FRONTEND_TTS_AUTOPLAY=true
 QWEN_TTS_API_BASE=http://holly:8765
