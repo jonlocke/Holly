@@ -208,3 +208,9 @@ __marimo__/
 
 # App runtime state
 question_history.json
+
+# Local secrets and keys — never commit these
+env
+*.key
+*.pem
+packaging/etc/default/holly-ux.local
