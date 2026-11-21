@@ -211,3 +211,9 @@ question_history.json
 data/
 face_verify_store.json
 identity_store.json
+
+# Local secrets and keys — never commit these
+env
+*.key
+*.pem
+packaging/etc/default/holly-ux.local
